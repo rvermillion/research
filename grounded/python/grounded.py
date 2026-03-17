@@ -52,5 +52,7 @@ class AttendWithGround(DefaultAttend):
         scores.add_unmasked(self.betas, self.ground_values)
         return scores
 
-
+    default_weight_aliases = {
+        'null_values': 'ground_values',
+    }
 
