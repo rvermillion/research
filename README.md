@@ -2,6 +2,7 @@
 
 **Richard Vermillion**
 Research Engineer · ML Systems Builder
+\
 [richard@vermillion.nyc](mailto:richard@vermillion.nyc) · [GitHub](https://github.com/rvermillion) · [X @rivermillion](https://x.com/rivermillion) · [LinkedIn](https://linkedin.com/rvermillion)
 
 ---
