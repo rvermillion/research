@@ -1,0 +1,254 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>one_pass_forgetting</title>
+  
+  <script>
+  window.MathJax = {
+    tex: {
+      inlineMath: [['\\(', '\\)'], ['$', '$']],
+      displayMath: [['\\[', '\\]'], ['$$', '$$']],
+      processEscapes: true,
+      processEnvironments: true,
+      tags: 'ams',  // Enable equation numbering
+      tagSide: 'right',
+      tagIndent: '.8em',
+    },
+    options: {
+      ignoreHtmlClass: 'tex2jax_ignore',
+      processHtmlClass: 'tex2jax_process'
+    }
+  };
+  </script>
+  <script type="text/javascript" id="MathJax-script" defer
+    src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-svg.js">
+  </script>
+  
+  <style type="text/css">body {
+  font-family: "Times New Roman";
+  font-size: 10pt;
+  line-height: 1.2em;
+  max-width: 800px;
+  padding-left: 50px;
+  padding-right: 50px;
+}
+p {
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+hr {
+  display: none;
+}
+h1 {
+  font-size: 16pt;
+  text-align: center;
+  line-height: 1.2em;
+  margin-top: 20px;
+  border-top: 3px solid black;
+  border-bottom: 1px solid black;
+  padding-top: 20px;
+  padding-bottom: 20px;
+}
+h1 + p {
+  padding: 0 100px;
+  text-align: center;
+}
+h2 {
+  font-size: 14pt;
+  margin-top: 20px;
+  margin-bottom: 10px;
+}
+h2.abstract {
+  text-align: center;
+}
+h2.abstract + p {
+  padding: 0 50px;
+}
+th {
+  text-align: left;
+  padding-right: 10px;
+}
+td {
+  vertical-align: top;
+  border-top: 1px solid #DDDDDD;
+  padding-top: 10px;
+  padding-right: 10px;
+}
+ul, ol {
+  margin-top: 10px;
+}
+li {
+  margin-bottom: 10px;
+}
+</style>
+</head>
+<body>
+    <div id="content" class="tex2jax_process">
+        <h1>One-Pass Forgetting: Layer-Wise Self-Distillation for Learned Memory Compression in Transformers</h1>
+<p class="author"><strong>Richard Vermillion</strong><br /></p>
+<p><strong>Abstract</strong> {: class="abstract"}</p>
+<p>Autoregressive transformers face a fundamental memory bottleneck as context grows. Transformers accumulate key–value
+(KV) pairs during autoregressive inference, causing linear growth in memory and compute with sequence length.<br />
+We introduce <strong>One-Pass Forgetting</strong>, a training framework that teaches transformers when and how to forget. A
+lightweight <strong>forget network</strong> learns to predict which past tokens remain useful, assigning retention probabilities
+to KV entries. A differentiable <strong>gated teacher–student mechanism</strong> provides supervision within a single forward pass.
+Each layer computes full attention to measure every past token’s <em>future utility</em>, then trains a forget network to
+approximate these scores using only causal information. Outputs from the fully-attentive “teacher” and the masked
+“student” paths are blended layer-by-layer through a gate $\lambda$, which is annealed during training. This approach
+enables stable, efficient training of adaptive KV-cache compression that directly mirrors inference-time behavior.  </p>
+<hr />
+<h2>1 Introduction</h2>
+<p>Transformers excel at long-context modeling but scale poorly: each new token expands the KV cache and quadratic attention cost. Real inference requires <em>forgetting</em>: discarding tokens whose contribution to future outputs is negligible.<br />
+Existing heuristics (fixed windows, attention-based pruning) ignore downstream loss impact and are detached from training.  </p>
+<p>We propose <strong>One-Pass Forgetting</strong>, a self-distilled learning scheme that trains the model to approximate its own contribution analysis <em>within</em> a single pass.<br />
+Key ideas:</p>
+<ol>
+<li><strong>Future-aware teacher:</strong> During each forward, we compute per-token contribution scores \(s_{t,j}\) using the unmasked full attention, measuring how much key–value pair \(j\) affects future outputs \(y_t\).</li>
+<li><strong>Causal forget network:</strong> A small network consumes only causal information (queries, keys, values, time indices, and local statistics) and predicts \(r_{t,j}\in[0,1]\), an estimated retention probability.</li>
+<li><strong>Differentiable mask and gate:</strong> The predicted retentions generate an additive <em>forgetful bias</em> \(B_{t,j}\) applied to attention logits; masked (“student”) outputs \(y^f_t\) are combined with unmasked (“teacher”) outputs \(y_t\) via \(y^{mix}_t=(1-\lambda)y_t+\lambda y^f_t\).<br />
+   The gate λ is annealed from 0→1, smoothly transitioning from teacher supervision to fully on-policy forgetting.</li>
+</ol>
+<p>This single-pass structure matches inference, where only one forward is available and tokens are evicted permanently.  </p>
+<hr />
+<h2>2 Methodology</h2>
+<h3>2.1 Contribution scoring</h3>
+<p>For each layer ℓ and token pair (t,j) with \(j\le t\):</p>
+<p>\[
+a_{t,j} = \frac{q_t^\top k_j}{\sqrt{d_k}}, \quad
+\alpha_{t,j} = \mathrm{softmax}<em t_j="t,j">j(a</em>),
+\quad
+u_{t,j} = \alpha_{t,j} v_j,
+\quad
+y_t = \sum_j u_{t,j}.
+\]</p>
+<p>Define normalized contribution:</p>
+<p>\[
+s_{t,j} = \Big|\frac{u_{t,j}}{y_t}\Big|^2_2,
+\]
+capturing both attention weight and value magnitude.</p>
+<p>To estimate long-term importance, pool over future timesteps:
+\[
+S_{t,j} = \mathrm{softmaxpool}<em i_j="i,j">{i\ge t}
+  \big(\tau_f\,\gamma^{i-t}s</em>\big),
+\]
+where τ₍f₎ anneals (sharpens) and γ optionally discounts.<br />
+This acts as a smooth, differentiable “future utility” target for retention.</p>
+<h3>2.2 Forget network and mask formation</h3>
+<p>Each layer ℓ hosts a small MLP or attention-lite module \(f_\theta\) producing \(r_{t,j}=f_\theta(\text{causal features})\).<br />
+These features may include:
+- relative position \(t-j\),
+- attention logits \(a_{t,j}\),
+- key/value norms, and
+- EMA of past attention to \(j\).</p>
+<p>Retention probabilities are mapped to a forgetful bias:
+\[
+B_{t,j} = \log \sigma(\tau_f(r_{t,j}-\tau_0)),
+\]
+clipped to \([-B_{\max},0]\).
+Biases are <strong>column-monotone</strong>:
+\[
+B_{t+1,j}\le B_{t,j},
+\]
+enforced via cumulative minimum along time to guarantee no “un-forgetting.”</p>
+<p>The masked attention logits are
+\[
+\tilde a^f_{t,j} = a_{t,j} + M_{t,j} + B_{t,j},
+\]
+with \(M\) the standard causal mask.</p>
+<h3>2.3 Layer-wise gated teacher–student blending</h3>
+<p>Each layer emits:
+\[
+y^{mix,(ℓ)} = (1-\lambda_{ℓ})\,y^{(ℓ)} + \lambda_{ℓ}\,y^{f,(ℓ)},
+\]
+where \(y^{(ℓ)}\) is the full teacher output and \(y^{f,(ℓ)}\) is computed with the forgetful mask.<br />
+As training progresses, λ increases (per schedule or per-layer), gradually shifting reliance from teacher to student.</p>
+<h3>2.4 Training objectives</h3>
+<ol>
+<li><strong>Primary task loss:</strong> \( \mathcal{L}_\text{LM}\) from final logits using mixed outputs.  </li>
+<li><strong>Forget-net distillation:</strong> KL or MSE between predicted retentions and normalized future utilities:
+   \[
+   \mathcal{L}<em t_j="t,j">r = \mathrm{KL}(\mathrm{stopgrad}(S</em>).
+   \]})\;|\;r_{t,j</li>
+<li><strong>Budget regularizer:</strong> keeps expected retention below capacity target \(B_t\):
+   \[
+   \mathcal{L}<em j_le="j\le" t="t">b = \lambda_b
+     \big|\sum</em>-\tau_0))-B_t\big|.
+   \]
+Total loss:
+\[
+\mathcal{L}=\mathcal{L}_\text{LM}+\beta_r\mathcal{L}_r+\beta_b\mathcal{L}_b.
+\]}\sigma(\tau_f(r_{t,j</li>
+</ol>
+<p>Gradients propagate through the student path only (teacher side <code>stopgrad</code>), enabling stable credit assignment.</p>
+<h3>2.5 Curriculum</h3>
+<ol>
+<li>
+<p><strong>Phase 1 (Distillation):</strong><br />
+   λ small (≈0.1); τ₍f₎ low (soft).<br />
+   Forget net learns from teacher’s full-attention utilities.</p>
+</li>
+<li>
+<p><strong>Phase 2 (On-policy):</strong><br />
+   λ→1, τ₍f₎ annealed high (sharp).<br />
+   Forget net directly modulates attention; supervision transitions to task loss only.</p>
+</li>
+</ol>
+<hr />
+<h2>3 Inference Alignment</h2>
+<p>During training, contribution scores \(s_{t,j}\) and their pooled future utilities \(S_{t,j}\) quantify how much each key–value pair influences future outputs, providing the <em>teacher</em> signal for the forget net. The forgetful mask then down-weights unhelpful tokens via continuous, differentiable biases \(B_{t,j}\) in attention logits.  </p>
+<p>At inference, this mechanism is replaced by an <strong>explicit cache eviction policy</strong> derived from the same retention probabilities \(r_{t,j}\):</p>
+<ul>
+<li>Each step, the forget net computes \(r_{t,j}\in[0,1]\) for past KV pairs using only causal features (no lookahead or contribution estimates).</li>
+<li>Keys whose predicted retention falls below a threshold \(\tau_{\mathrm{low}}\) are <strong>evicted</strong> from the cache through an O(1) swap-delete operation across all heads.<br />
+  The corresponding key/value entries are replaced with the tail of the live prefix and the cache end pointer is decremented.</li>
+<li>A <strong>remember window</strong> of the most recent \(w\) tokens is always protected from eviction, ensuring local coherence and short-term memory.</li>
+<li>Optional hysteresis prevents oscillatory behavior: once a token is evicted, it cannot re-enter the cache (enforcing column-wise monotonicity).</li>
+</ul>
+<p>Thus, at inference:
+- No attention masks or contribution computations are needed.
+- The forget net’s scalar retentions act as <em>learned eviction probabilities</em>.
+- The model’s live context automatically contracts and expands to fit relevance and hardware budgets.</p>
+<p>This design eliminates quadratic scaling while preserving high-level semantics: during training, attention masking teaches <em>how much each token should matter</em>; during inference, eviction operationalizes <em>how long each token should persist.</em></p>
+<hr />
+<h2>4 Experiments</h2>
+<p><strong>Datasets:</strong> Long-context language benchmarks (PG19, Books3, Code, ArXiv).<br />
+<strong>Baselines:</strong> Sliding-window attention, retrieval-based pruning, LongLoRA, DynamicKV, Streaming Transformers.<br />
+<strong>Metrics:</strong> perplexity, retrieval F1 on long dependencies, compute and memory footprint.</p>
+<p><strong>Ablations</strong>
+1. Forget net architecture (MLP vs. attention-lite).<br />
+2. Pooling function (softmaxpool vs. max vs. discount).<br />
+3. Bias annealing τ₍f₎ schedule.<br />
+4. Layer-wise λ gating schedules.<br />
+5. Monotonicity enforcement vs. free retention.<br />
+6. Fixed vs. learned budget targets.<br />
+7. Phase-2 on-policy fine-tuning vs. none.</p>
+<p><strong>Expected outcomes:</strong> significant reduction in active KV cache (&gt;50%) with minimal perplexity loss (&lt;1%), smooth degradation when budget is tight, and graceful forgetting of function words and locally absorbed context.</p>
+<hr />
+<h2>5 Related work</h2>
+<ul>
+<li><strong>Memory pruning &amp; streaming:</strong> Transformer-XL, Compressive Transformer, Longformer, Mamba, Dynamic Memory Transformer.</li>
+<li><strong>Gradient-free credit assignment:</strong> Hebbian/eligibility traces, RTRL approximations.</li>
+<li><strong>Self-distillation:</strong> Born-Again Networks, knowledge distillation for transformers.</li>
+<li><strong>Neural compression:</strong> learned attention sparsification, key pooling.</li>
+</ul>
+<p>Unlike prior two-pass schemes, One-Pass Forgetting achieves self-supervised memory compression <em>within a single forward pass</em>, maintaining gradient flow and strict causal constraints.</p>
+<hr />
+<h2>6 Discussion and Future Work</h2>
+<p>The distinction between <strong>training-time contribution scores</strong> and <strong>inference-time retention</strong> embodies the transition from <em>analysis</em> to <em>action</em>:<br />
+- During training, \(s_{t,j}\) and \(S_{t,j}\) measure <em>how valuable each token truly was</em> for future predictions;<br />
+- During inference, \(r_{t,j}\) predicts <em>how valuable it is likely to be going forward</em>, using only causal state.</p>
+<p>The model thus learns an internal estimate of <em>prospective utility</em>, not merely retrospective importance. This parallels biological learning: synapses strengthen or decay not by replaying all past activations but by maintaining a predictive estimate of future usefulness.</p>
+<p>The continuous forgetful mask during training ensures smooth gradient flow and allows the model to explore different retention policies. The discrete eviction at inference time is simply the <em>hard projection</em> of that policy onto a constrained memory budget. In practice, this produces a near-seamless behavioral match between training and inference:
+- Differentiable masking teaches <em>what forgetting means</em>;
+- Retention-driven eviction enforces <em>when to forget</em>.</p>
+<p>Future work may explore adaptive runtime policies—e.g., dynamically varying thresholds \(\tau_{\mathrm{low}}\) based on context length, layer sensitivity, or compute budget—and coupling the forget net with summarizers that distill evicted information into compressed memory vectors. Together, these mechanisms bring transformers closer to systems that manage attention, memory, and forgetting as first-class, learned processes.</p>
+<hr />
+<p><strong>Conclusion</strong></p>
+<p>One-Pass Forgetting replaces post-hoc cache management with a differentiable, train-time mechanism for selective memory.<br />
+By coupling a causal forget network with gated teacher supervision in a single forward pass, transformers can learn to balance remembering and forgetting dynamically—mirroring how biological and efficient artificial systems manage long-term context.</p>
+    </div>
+</body>
+</html>

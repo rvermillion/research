@@ -1,0 +1,335 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>dharma</title>
+  
+  <script>
+  window.MathJax = {
+    tex: {
+      inlineMath: [['\\(', '\\)'], ['$', '$']],
+      displayMath: [['\\[', '\\]'], ['$$', '$$']],
+      processEscapes: true,
+      processEnvironments: true,
+      tags: 'ams',  // Enable equation numbering
+      tagSide: 'right',
+      tagIndent: '.8em',
+    },
+    options: {
+      ignoreHtmlClass: 'tex2jax_ignore',
+      processHtmlClass: 'tex2jax_process'
+    }
+  };
+  </script>
+  <script type="text/javascript" id="MathJax-script" defer
+    src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-svg.js">
+  </script>
+  
+  <style type="text/css">body {
+  font-family: "Times New Roman";
+  font-size: 10pt;
+  line-height: 1.2em;
+  max-width: 800px;
+  padding-left: 50px;
+  padding-right: 50px;
+}
+p {
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+hr {
+  display: none;
+}
+h1 {
+  font-size: 16pt;
+  text-align: center;
+  line-height: 1.2em;
+  margin-top: 20px;
+  border-top: 3px solid black;
+  border-bottom: 1px solid black;
+  padding-top: 20px;
+  padding-bottom: 20px;
+}
+h1 + p {
+  padding: 0 100px;
+  text-align: center;
+}
+h2 {
+  font-size: 14pt;
+  margin-top: 20px;
+  margin-bottom: 10px;
+}
+h2.abstract {
+  text-align: center;
+}
+h2.abstract + p {
+  padding: 0 50px;
+}
+th {
+  text-align: left;
+  padding-right: 10px;
+}
+td {
+  vertical-align: top;
+  border-top: 1px solid #DDDDDD;
+  padding-top: 10px;
+  padding-right: 10px;
+}
+ul, ol {
+  margin-top: 10px;
+}
+li {
+  margin-bottom: 10px;
+}
+</style>
+</head>
+<body>
+    <div id="content" class="tex2jax_process">
+        <h1>Adaptive Rank Modification via Hebbian Eligibility Traces</h1>
+<p class="author"><strong>Richard Vermillion</strong><br /></p>
+<hr />
+<h2 class="abstract">Abstract</h2>
+<p>We propose a biologically inspired mechanism for adaptive model capacity in low-rank neural architectures. Building on
+low-rank factorization of weight matrices, we introduce <strong>Hebbian eligibility traces</strong> that track the long-term 
+usefulness of each rank-1 component during training. These traces serve as distributed credit assignments that drive
+both <strong>rank growth</strong> and <strong>rank shrinkage</strong>, allowing models to allocate representational capacity dynamically in
+response to training pressure. Unlike post-hoc compression or static rank assignment, our approach maintains 
+function-preserving updates during capacity changes, avoids catastrophic loss spikes, and uses local statistics derived
+from activations and gradients. We outline theoretical motivations, implementation details, and experimental protocols
+for evaluating this method in transformer architectures, particularly in the Q/K/V projections of attention layers.
+Unlike post-hoc compression, which relies on data-agnostic matrix decompositions such as SVD, our method continuously
+re-weights rank components by their utility under the observed data distribution and task gradients, allowing
+neighboring parameters to co-adapt during training.</p>
+<hr />
+<h2>1 Introduction</h2>
+<p>Transformer networks and their derivatives are often over-parameterized, with many layers containing significant
+redundancy. Recent research has demonstrated that low-rank factorization of linear projections can dramatically reduce
+parameter count without large accuracy losses. However, most methods fix the rank <em>a priori</em> or apply compression 
+<em>post hoc</em>, ignoring the dynamics of learning and the uneven distribution of representational pressure across layers
+and time.</p>
+<p>We propose a dynamic alternative: <strong>Dynamic Hebbian Adaptive Rank Modification Algorithm (DHARMA)</strong>. Each linear
+projection \(W\in\mathbb{R}^{N\times N}\) is factorized as \(W=UV\), where \(U\in\mathbb{R}^{N\times K}\) and
+\(V\in\mathbb{R}^{K\times N}\). During training, the model monitors each rank‑1 term \(u_i v_i^\top\) using local
+eligibility traces derived from Hebbian interactions between pre‑activations and backpropagated gradients. These
+traces accumulate evidence for the term’s long‑term utility. When global loss improvement plateaus, the traces guide
+<strong>targeted rank expansion or contraction</strong>: growing new directions where gradient variance is high and pruning
+under-utilized ones where eligibility decays toward zero.</p>
+<p>This mechanism offers a simple, distributed, and biologically plausible route to <em>automatic capacity control</em> in deep
+networks—analogous to synaptic consolidation and pruning in the brain.</p>
+<hr />
+<h2>2 Background</h2>
+<h3>2.1 Low-Rank Factorization</h3>
+<p>Low‑rank parameterizations \(W = UV\) have been used for model compression, e.g., in LSTMs and Transformers. Techniques
+such as LoRA add low‑rank adapters on top of pretrained dense matrices, while others retrain from scratch with reduced
+rank. However, existing work either fixes rank globally or applies SVD‑based truncation after training, neither of
+which exploits online feedback from learning dynamics.</p>
+<h3>2.2 Hebbian Learning and Eligibility Traces</h3>
+<p>In neurobiology, <em>eligibility traces</em> represent time‑decaying records of local synaptic activity that interact with
+delayed reward or error signals to drive learning (Frémaux &amp; Gerstner, 2016). The general three‑factor rule combines
+pre‑synaptic activity, post‑synaptic activity, and a global modulatory factor. Analogous mechanisms have been explored
+in reinforcement learning for temporal credit assignment. To date, such traces have rarely been applied to <em>structural</em>
+adaptation in deep networks.</p>
+<h3>2.3 Adaptive Rank and Neural Plasticity</h3>
+<p>Some recent works introduce adaptive rank selection through parameter‑importance measures or learned binary gates, yet
+these typically rely on magnitude or Hessian sensitivity criteria and operate only at layer granularity. Dynamic rank
+expansion or shrinkage driven by online learning signals remains under‑explored.</p>
+<hr />
+<h2>3 Method</h2>
+<h3>3.1 Low-Rank Parameterization</h3>
+<p>We represent each projection W in a low-rank factorized form \(W = U V\), where the inner dimension \(K\) controls
+the representational capacity:</p>
+<p>\[
+W = UV = \sum_{i=1}^{K} u_i v_i^\top.
+\]</p>
+<p>Training proceeds as usual with gradients \(\partial \mathcal L / \partial U\) and \(\partial \mathcal L / \partial V\).</p>
+<hr />
+<h3>3.2 Hebbian Eligibility Traces</h3>
+<p>For input \(x\) and output gradient \(g_y = \partial \mathcal L / \partial y\), we define a local activity signal for
+rank component \(i\):</p>
+<p>\[
+\phi_i = (u_i^\top x)\,(v_i^\top g_y).
+\]</p>
+<p>We maintain exponentially decaying traces:</p>
+<p>\[
+e_i \leftarrow \lambda e_i + \phi_i, \quad
+q_i \leftarrow \lambda q_i + \phi_i^2,
+\]</p>
+<p>where \(e_i\) tracks signed usefulness and \(q_i\) tracks energy or volatility. Typical decay
+\(\lambda \in [0.95, 0.995]\).</p>
+<p>Optionally, a global performance delta \(\delta_t = L_{t-1} - L_t\) acts as a modulatory factor:</p>
+<p>\[
+c_i \leftarrow c_i + \alpha\, \delta_t\, e_i.
+\]</p>
+<p>Here \(c_i\) represents long-term credit (positive if the component’s activation correlates with improved loss).</p>
+<hr />
+<h3>3.3 Adaptive Rank Growth</h3>
+<p>When training loss or validation perplexity plateaus, components with high <strong>gradient variance</strong> or large \(|c_i|\)
+indicate unresolved learning pressure. The algorithm duplicates the top-pressure components function-preservingly:</p>
+<p>\[
+U' = [U \;\; U_S], \quad
+V' = \begin{bmatrix}V \\ 0\end{bmatrix},
+\]</p>
+<p>where \(S\) indexes selected components. New columns are initialized as slight perturbations of existing \(u_i,v_i\),
+maintaining \(U'V' = UV\) before additional training.</p>
+<hr />
+<h3>3.4 Adaptive Rank Shrinkage</h3>
+<p>Conversely, when eligibility traces decay and \(|c_i|/\sqrt{q_i}\) falls below a threshold for prolonged periods,
+the corresponding components are marked as <em>inactive</em>. To remove them without disrupting function:</p>
+<ol>
+<li><strong>Rotation:</strong> A small \(K\times K\) orthogonal rotation consolidates energy into leading components.  </li>
+<li><strong>Zeroing phase:</strong> Inactive columns/rows are zeroed while training continues briefly.  </li>
+<li><strong>Pruning:</strong> Columns/rows with persistently near-zero contribution are physically removed, reducing \(K\).  </li>
+</ol>
+<p>This ensures shrinkage is smooth and data-driven rather than arbitrary.</p>
+<p>A distribution-aware variant weights activity by activation and gradient covariances:</p>
+<p>\[
+I_i = \mathbb{E}\big[(u_i^\top x)^2\big]\,\mathbb{E}\big[(v_i^\top g_y)^2\big],
+\]</p>
+<p>or more generally uses diagonals of the Fisher information. Components with small \(I_i\) are considered expendable.</p>
+<hr />
+<h3>3.5 Optional Shared-U Parameterization</h3>
+<p>While the core DHARMA formulation treats each projection \(W_Q\), \(W_K\), \(W_V\) independently as
+\(W_\bullet = U_\bullet V_\bullet\), an alternative implementation shares a common input-side projection \(U\) across
+the three:
+\[
+W_Q = U V_Q,\quad W_K = U V_K,\quad W_V = U V_V.
+\]
+This reduces parameters from \(3N K + 3K N\) to roughly \(N K + 3K N\) (saving one factor of \(3\times\) on the input
+side) and allows caching of \(xU\) during attention computation, since all three projections use the same intermediate
+representation. The trade-off is a mild coupling of Q/K/V subspaces, which can limit expressivity but may act as a
+regularizer in over-parameterized regimes. In preliminary analysis, this variant provides additional memory and
+compute savings with negligible degradation for moderate K/N ratios and could be explored as a lightweight extension
+of the DHARMA framework.</p>
+<p>It is also possible to allow each projection to have its own rank, \(K_\bullet\), even with shared \(U\). In this case,
+\(K_U = max(K_\bullet)\). When \(K_\bullet &lt; K_U\), each projection \(W_\bullet\) consumes only the first \(K_\bullet\) latent components of
+the shared basis, i.e., \(xW_\bullet = (xU){[:, :K_\bullet]}V_\bullet\). This allows differential rank growth while
+preserving a single cached \(xU\) computation.</p>
+<h4>3.5.1 Eligibility Traces for Shared \(U\)</h4>
+<p>When the same input-side projection U is shared across multiple attention projections (\(W_Q\), \(W_K\), \(W_V\)), each
+column \(u_i\) contributes to three distinct outputs. Accordingly, its eligibility trace aggregates activity across
+all associated pathways:
+\[
+e_i^{(U)} \leftarrow \lambda\, e_i^{(U)}
+    •   (u_i^\top x)
+\sum_{\bullet \in {Q,K,V}}
+(v_{i\bullet}^\top g_\bullet),
+\]
+where \(g_\bullet = \partial \mathcal L / \partial y_\bullet\) denotes the gradient of the loss with respect to each
+projection’s output.</p>
+<p>This formulation effectively pools Hebbian updates across the attention subspaces, ensuring that the shared basis \(U\)
+strengthens or weakens directions according to their aggregate utility across all Q/K/V projections.</p>
+<p>The shared trace \(e_i^{(U)}\) governs growth and shrinkage of \(u_i\), while independent traces \(e_i^{(V_{\bullet})}\)
+can guide reweighting within each projection’s output subspace.</p>
+<h3>3.6 Rank Saturation and Promotion to Full Rank</h3>
+<p>In rare cases, a layer may reach its maximum configured latent dimension \(K_U\) yet continue to accumulate high
+eligibility or gradient variance, indicating persistent representational pressure. Rather than artificially capping
+capacity, DHARMA permits a promotion step:
+\[
+W_{\text{dense}} \leftarrow U V,
+\]
+after which training proceeds with a standard dense parameterization. This transition effectively disables low-rank
+constraints for that layer, acknowledging that the full ambient space \(N\) is required to model the data. The
+promotion can be reversible: layers promoted to full rank may later be refactorized into low-rank form once eligibility
+traces decay, providing a bidirectional pathway between efficiency and expressivity.</p>
+<h3>3.7 Algorithm Summary</h3>
+<ol>
+<li>Train with low-rank \(W=UV\).  </li>
+<li>Maintain per-component traces \(e_i, q_i, c_i\).  </li>
+<li>On plateau:  <ul>
+<li><strong>Grow:</strong> duplicate top-pressure components (high gradient variance).  </li>
+<li><strong>Shrink:</strong> prune low-eligibility components.  </li>
+</ul>
+</li>
+<li>Continue training; repeat periodically.</li>
+</ol>
+<p>This yields an online balance between model compression and capacity expansion.</p>
+<hr />
+<h2>4 Relation to Prior Work</h2>
+<table>
+<thead>
+<tr>
+<th>Theme</th>
+<th>Prior Work</th>
+<th>Difference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Low‑rank&nbsp;adaptation</td>
+<td>LoRA,&nbsp;AdaLoRA,&nbsp;AROMA</td>
+<td>Those fix rank or adapt via gradients on rank masks; we adapt structure itself via eligibility traces</td>
+</tr>
+<tr>
+<td>Synaptic&nbsp;plasticity</td>
+<td>Three‑factor&nbsp;learning&nbsp;rules</td>
+<td>We use Hebbian traces not for parameter updates but to decide capacity allocation</td>
+</tr>
+<tr>
+<td>Dynamic&nbsp;architecture</td>
+<td>Net2Net,&nbsp;grow‑and‑prune&nbsp;DNNs</td>
+<td>Those operate at neuron/layer level; our adaptation is continuous and local within a matrix factorization</td>
+</tr>
+<tr>
+<td>Compression</td>
+<td>SVD/Hessian&nbsp;pruning</td>
+<td>Offline and loss‑agnostic; ours is online, data‑ and gradient‑driven</td>
+</tr>
+</tbody>
+</table>
+<p>To our knowledge, <strong>no prior method combines Hebbian eligibility traces with adaptive low‑rank growth and shrinkage</strong>
+in modern transformer architectures.</p>
+<hr />
+<h2>5 Experimental Plan</h2>
+<p>We propose to evaluate DHARMA on transformer language models (e.g., GPT-style 125 M parameter
+baseline) under the following conditions:</p>
+<ol>
+<li><strong>Fixed low-rank baseline</strong> — compare to static rank \(K\).  </li>
+<li><strong>Post-hoc compression</strong> — standard SVD truncation.  </li>
+<li><strong>DHARMA</strong> — with eligibility-trace driven growth/shrink.</li>
+</ol>
+<p><strong>Metrics:</strong>  </p>
+<ul>
+<li>Validation loss vs. compute cost (FLOPs).  </li>
+<li>Parameter efficiency (bits per perplexity).  </li>
+<li>Distribution of learned ranks per layer/head.  </li>
+<li>Stability under continued training and fine-tuning.  </li>
+</ul>
+<p><strong>Ablations:</strong>  </p>
+<ul>
+<li>Effect of trace decay \(\lambda\).  </li>
+<li>Hebbian term vs. gradient-variance heuristic.  </li>
+<li>Impact of eligibility-trace modulation (with/without \(\delta_t\)).  </li>
+<li>Separate vs. shared \(U\) among Q/K/V projections.</li>
+</ul>
+<hr />
+<h2>6 Discussion</h2>
+<p>The proposed mechanism provides a bridge between biological notions of synaptic efficacy and practical model
+compression. Its entirely local statistics make it easily parallelizable and compatible with modern accelerators.
+By letting rank evolve naturally, the model can exploit redundancy early in training and specialize later, improving
+both efficiency and generalization.</p>
+<p>Potential extensions include:</p>
+<ul>
+<li>Extending traces to nonlinear adapters (e.g., LoRA modules).  </li>
+<li>Combining with Fisher-weighted pruning for stronger theoretical grounding.  </li>
+<li>Applying to recurrent or neuromorphic architectures.</li>
+</ul>
+<hr />
+<h2>7 Conclusion</h2>
+<p>We introduced a conceptual framework for <strong>adaptive rank selection via Hebbian eligibility traces</strong>. The method offers
+a biologically inspired path toward self-regulating model capacity, coupling long-term activity statistics with
+structural adaptation. While preliminary, it suggests that ideas from neural plasticity—temporal credit assignment,
+eligibility traces, and use-dependent consolidation—may have powerful analogues in optimizing artificial networks.</p>
+<hr />
+<h2>References</h2>
+<ul>
+<li>Frémaux, N., &amp; Gerstner, W. (2016). <em>Neuromodulated spike‑timing‑dependent plasticity and theory of three‑factor learning rules.</em> Frontiers in Neural Circuits.  </li>
+<li>Hu, E. J., et al. (2022). <em>LoRA: Low‑Rank Adaptation of Large Language Models.</em> arXiv:2106.09685.  </li>
+<li>Aghajanyan, A., et al. (2020). <em>Intrinsic Dimensionality Explains the Effectiveness of Language Model Fine‑Tuning.</em> ACL.  </li>
+<li>Chen, Y., et al. (2024). <em>Adaptive Rank Selections for Low‑Rank Approximation of Neural Networks.</em> NAACL.  </li>
+<li>Tay, Y., et al. (2022). <em>Efficient Transformers: A Survey.</em> ACM Computing Surveys.</li>
+</ul>
+    </div>
+</body>
+</html>

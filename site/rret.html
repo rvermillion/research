@@ -1,0 +1,225 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>rret</title>
+  
+  <script>
+  window.MathJax = {
+    tex: {
+      inlineMath: [['\\(', '\\)'], ['$', '$']],
+      displayMath: [['\\[', '\\]'], ['$$', '$$']],
+      processEscapes: true,
+      processEnvironments: true,
+      tags: 'ams',  // Enable equation numbering
+      tagSide: 'right',
+      tagIndent: '.8em',
+    },
+    options: {
+      ignoreHtmlClass: 'tex2jax_ignore',
+      processHtmlClass: 'tex2jax_process'
+    }
+  };
+  </script>
+  <script type="text/javascript" id="MathJax-script" defer
+    src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-svg.js">
+  </script>
+  
+  <style type="text/css">body {
+  font-family: "Times New Roman";
+  font-size: 10pt;
+  line-height: 1.2em;
+  max-width: 800px;
+  padding-left: 50px;
+  padding-right: 50px;
+}
+p {
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+hr {
+  display: none;
+}
+h1 {
+  font-size: 16pt;
+  text-align: center;
+  line-height: 1.2em;
+  margin-top: 20px;
+  border-top: 3px solid black;
+  border-bottom: 1px solid black;
+  padding-top: 20px;
+  padding-bottom: 20px;
+}
+h1 + p {
+  padding: 0 100px;
+  text-align: center;
+}
+h2 {
+  font-size: 14pt;
+  margin-top: 20px;
+  margin-bottom: 10px;
+}
+h2.abstract {
+  text-align: center;
+}
+h2.abstract + p {
+  padding: 0 50px;
+}
+th {
+  text-align: left;
+  padding-right: 10px;
+}
+td {
+  vertical-align: top;
+  border-top: 1px solid #DDDDDD;
+  padding-top: 10px;
+  padding-right: 10px;
+}
+ul, ol {
+  margin-top: 10px;
+}
+li {
+  margin-bottom: 10px;
+}
+</style>
+</head>
+<body>
+    <div id="content" class="tex2jax_process">
+        <h1>Read-Refreshed Eligibility Traces: Bridging BPTT and Long-Range Credit Assignment in Recurrent Transformers</h1>
+<p><strong>Author:</strong> Richard Vermillion
+<strong>Date:</strong> <em>2025-10-25</em></p>
+<hr />
+<h2>Abstract</h2>
+<p>Windowed back-propagation through time (BPTT) enables efficient training of recurrent architectures such as recurrent transformers but limits learning to short temporal horizons. Full BPTT captures long-range dependencies but scales linearly in both memory and compute with sequence length.<br />
+We introduce <strong>Read-Refreshed Eligibility Traces (RRET)</strong> — a hybrid approach that maintains compact, usage-conditioned “credit traces” for past activations and updates them <em>only when those memories are retrieved</em> by attention.<br />
+Inside a fixed-length window we compute exact gradients; outside it, we refresh Hebbian-style eligibility traces parameterized by the attention weights, routing sensitivities, and critic-derived postsynaptic drives.<br />
+This yields a recurrent transformer that can learn from arbitrarily long sequences with fixed memory cost, propagating credit precisely to semantically relevant past states while ignoring unused ones.<br />
+We derive the update rules, describe an efficient implementation, and propose experiments demonstrating that RRET matches full BPTT on long-range dependency benchmarks at a fraction of the memory cost.</p>
+<hr />
+<h2>1 Introduction</h2>
+<p>Standard recurrent transformers face a fundamental trade-off: <strong>windowed BPTT</strong> enables efficient training with bounded memory but prevents learning from gradients or rewards beyond the truncation horizon \(T\). <strong>Full BPTT</strong> captures those dependencies but becomes infeasible for long sequences due to quadratic attention cost and linear memory growth.</p>
+<p>We propose <strong>Read-Refreshed Eligibility Traces (RRET)</strong> — a mechanism that blends exact short-range back-propagation with biologically inspired, long-range credit assignment.<br />
+RRET maintains lightweight, synapse-like traces for past computations that are <em>refreshed only when the corresponding memories are read</em> from the key–value (KV) cache of a recurrent transformer.</p>
+<p>When a query at time \(t\) attends to a cached key–value pair \((k_i,v_i)\) from step \(i&lt;t\), the trace for that pair is updated according to:</p>
+<ul>
+<li><strong>Attention strength</strong> \( \alpha_{t,i}\): how much the memory was used  </li>
+<li><strong>Routing sensitivity</strong> \( \Delta_{t,i}\): how much changing its key would affect the output  </li>
+<li><strong>Postsynaptic drive</strong> \( u_t\): a local gradient direction provided by either the true gradient (inside the window) or a learned critic</li>
+</ul>
+<p>These read-time refreshes form <em>usage-conditioned eligibility traces</em> that accumulate credit exactly for the memories that matter.<br />
+When a delayed loss or reward signal arrives, the accumulated traces serve as low-variance, temporally extended gradient estimators.</p>
+<hr />
+<h2>2 Method</h2>
+<h3>2.1 Architecture Overview</h3>
+<p>RRET extends a standard recurrent transformer block with four components:</p>
+<ol>
+<li><strong>Windowed unroll:</strong> Exact BPTT is performed for the most recent \(T\) steps.  </li>
+<li><strong>KV cache:</strong> Each past step stores its compressed input \(\tilde x_i=P x_i\), keys \(k_i=W_k x_i\), values \(v_i=W_v x_i\), and timestamp \(\tau_i\).  </li>
+<li><strong>Read-refreshed traces:</strong> For cache entries older than the current window, per-head eligibility matrices \(e^{(k)}<em i_h="i,h">{i,h}, e^{(v)}</em>\) are updated on every read.  }\in\mathbb{R}^{d_h\times r</li>
+<li><strong>Critic head:</strong> A small network \( \hat r_t = f(o_t) \) predicts future returns and supplies the local Jacobian \( J_t=\partial \hat r_t/\partial o_t \), used as the postsynaptic drive \(u_t\) when true gradients are unavailable.</li>
+</ol>
+<h3>2.2 Eligibility Updates</h3>
+<p>For query \(q_t^{(h)}\) attending to item \(i\) with weight \(\alpha_{t,i}^{(h)}\):</p>
+<p>\[
+\begin{aligned}
+e^{(v)}<em i_h="i,h">{i,h} &amp;\leftarrow \lambda\,e^{(v)}</em>
+    + \eta_v\,\alpha_{t,i}^{(h)}\, u_t^{(h)}\, \tilde x_i^\top,\[3pt]
+\Delta_{t,i}^{(h)} &amp;= \frac{1}{\sqrt{d_h}}\,u_t^{(h)\top}(v_i^{(h)}-\tilde o_t^{(h)}),\[3pt]
+e^{(k)}<em i_h="i,h">{i,h} &amp;\leftarrow \lambda\,e^{(k)}</em>
+    + \eta_k\,\alpha_{t,i}^{(h)}\,\tilde\Delta_{t,i}^{(h)}\, q_t^{(h)}\,\tilde x_i^\top,
+\end{aligned}
+\]</p>
+<p>where \(\tilde\Delta\) denotes the variance-reduced, normalized routing sensitivity.<br />
+Traces decay with factor \(\lambda\in(0,1)\) and are updated only for items outside the current BPTT window.</p>
+<p>When a scalar training signal \(\delta_t\) (e.g., TD error or per-step loss) arrives, parameter updates are:</p>
+<p>\[
+\Delta W_{v,k,q}
+   = \Big(\sum_{i,h} e^{(v,k,q)}_{i,h}\Big) P^\top \,\delta_t.
+\]</p>
+<p>This structure matches the three-factor learning rule observed in biological synapses: <em>presynaptic activity</em> (\(\tilde x_i\)), <em>postsynaptic drive</em> (\(u_t\)), and a <em>modulatory signal</em> (\(\delta_t\)).</p>
+<h3>2.3 Compression and Memory Efficiency</h3>
+<p>To limit storage, inputs are projected to a low-rank subspace \( \tilde x_i = P x_i \), with \(P\in\mathbb{R}^{r\times d_{\text{model}}}\).<br />
+If \(P\) is fixed (random or orthogonal), gradients flow only through \(W_{k,v,q}\); if learned, \(P\) is updated on a slower timescale.<br />
+Each eligibility matrix is \(d_h\times r\); with \(r=d_\text{model}/4\) and top-k attention, trace memory remains \(O(n_\text{heads}\,r\,d_h\,k)\), independent of sequence length.</p>
+<h3>2.4 Variance-Reduction Techniques</h3>
+<ul>
+<li><strong>Attention sharpening:</strong> replace \(\alpha\) with \(\alpha^\beta/\sum \alpha^\beta\) (\(\beta=2\)–3).  </li>
+<li><strong>Normalization:</strong> maintain per-head running mean/variance of \(\Delta_{t,i}\).  </li>
+<li><strong>Baselines:</strong> subtract softmax-weighted or EMA baselines from \(\Delta\).  </li>
+<li><strong>Adaptive learning rates:</strong> RMSprop statistics on trace increments.  </li>
+<li><strong>Overlap smoothing:</strong> optional ramp transition for tokens crossing window boundaries.</li>
+</ul>
+<hr />
+<h2>3 Experimental Plan</h2>
+<h3>3.1 Tasks</h3>
+<ol>
+<li><strong>Synthetic Long-Range Copy / Addition</strong> – 10k-step sequences to test gradient reach.  </li>
+<li><strong>Character-level Text Modeling</strong> – enwik8 with long context; compare to truncated and full BPTT.  </li>
+<li><strong>Reinforcement Learning</strong> – delayed-reward maze or algorithmic tasks (e.g., DMLab MemoryMaze).  </li>
+<li><strong>Long-horizon control</strong> – recurrent world-model predicting rewards hundreds of steps ahead.</li>
+</ol>
+<h3>3.2 Baselines</h3>
+<ul>
+<li>Full BPTT (upper bound)  </li>
+<li>Truncated BPTT (equal compute budget)  </li>
+<li>e-prop / Real-Time Recurrent Learning approximations  </li>
+<li>Feedback-alignment RNNs  </li>
+<li>Sparse Transformer with segment recurrence</li>
+</ul>
+<h3>3.3 Metrics</h3>
+<ul>
+<li><strong>Loss / return</strong> vs. sequence length  </li>
+<li><strong>Gradient reachability:</strong> correlation of true vs. trace-based gradient estimates  </li>
+<li><strong>Memory footprint (GB)</strong> vs. context length  </li>
+<li><strong>Wall-clock throughput</strong>  </li>
+<li><strong>Variance of Δ and trace norms</strong>  </li>
+<li><strong>Ablations:</strong>  </li>
+<li>No normalization / no baseline  </li>
+<li>Different compression rank \(r\)  </li>
+<li>Critic vs. random feedback  </li>
+<li>Read-refresh disabled (time-decayed traces only)</li>
+</ul>
+<h3>3.4 Expected outcomes</h3>
+<p>RRET should:</p>
+<ul>
+<li>Match full BPTT within 1–3 % loss on long-range tasks while using \(&lt;20 \%\) of the memory  </li>
+<li>Outperform truncated BPTT on horizons \(&gt;!T\)  </li>
+<li>Show stable training when critic Jacobian replaces true gradient</li>
+</ul>
+<hr />
+<h2>4 Related Work</h2>
+<ul>
+<li><strong>Eligibility traces &amp; e-prop</strong> (Bellec et al., 2020; Lillicrap et al., 2020): local, three-factor rules approximating BPTT in spiking and recurrent nets.  </li>
+<li><strong>Feedback alignment / forward gradients</strong> (Lillicrap et al., 2016; Akrout et al., 2019): random or learned local surrogates for backprop.  </li>
+<li><strong>Truncated BPTT variants</strong> (Tallec &amp; Ollivier 2018; Wojcik et al. 2021): bias-reduction schemes within finite windows.  </li>
+<li><strong>Recurrent transformers</strong> (Dai et al., 2019; Hutchins et al., 2023): segment recurrence for long contexts, but still no true gradient propagation beyond the window.  </li>
+<li><strong>Neuroscience of credit assignment</strong> (Gerstner et al., 2018): synaptic eligibility traces plus modulatory rewards as biological analogues to this mechanism.</li>
+</ul>
+<p>No prior work combines read-conditioned eligibility updates with transformer-style KV caching and hybrid BPTT, making RRET a new member of this family.</p>
+<hr />
+<h2>5 Discussion</h2>
+<p>RRET reframes credit assignment as an <em>event-driven process</em>: memory tokens accumulate credit only when they influence future computation.<br />
+By updating traces on retrieval rather than on every timestep, the model aligns temporal credit with semantic relevance — an efficiency principle absent from standard BPTT.</p>
+<p>Limitations include sensitivity to critic quality and additional hyperparameters (decay λ, compression rank r).<br />
+Future work includes multi-layer variants, stochastic-key training, and integration with differentiable memory systems or agents operating in continuous environments.</p>
+<hr />
+<h2>6 Conclusion</h2>
+<p><strong>Read-Refreshed Eligibility Traces</strong> bridge the gap between truncated and full BPTT.<br />
+They provide exact gradients where possible, approximate gradients where necessary, and biologically inspired long-range credit assignment everywhere else.<br />
+This hybrid makes recurrent transformers scalable to arbitrarily long horizons while maintaining gradient flow aligned with their learned attention patterns.</p>
+<hr />
+<h2>References</h2>
+<ul>
+<li>Bellec, G. et al. (2020). <em>e-prop: A multi-factor learning rule for recurrent neural networks.</em> Nature Communications.  </li>
+<li>Lillicrap, T., Cownden, D., Tweed, D., Akerman, C. (2016). <em>Random synaptic feedback weights support error backpropagation for deep learning.</em> Nature Comms.  </li>
+<li>Akrout, M. et al. (2019). <em>Deep learning without weight transport.</em> NeurIPS.  </li>
+<li>Gerstner, W. et al. (2018). <em>Eligibility traces and plasticity on multiple timescales.</em> Biological Cybernetics.  </li>
+<li>Tallec, C., &amp; Ollivier, Y. (2018). <em>Can recurrent neural networks warp time?</em> ICLR.  </li>
+<li>Dai, Z. et al. (2019). <em>Transformer-XL: Attentive language models beyond a fixed-length context.</em> ACL.  </li>
+<li>Hutchins, D. et al. (2023). <em>Recurrent memory transformers for long-horizon sequence modeling.</em> arXiv:2305.</li>
+</ul>
+    </div>
+</body>
+</html>

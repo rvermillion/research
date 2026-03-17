@@ -1,0 +1,240 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>rotational-transformer</title>
+  
+  <script>
+  window.MathJax = {
+    tex: {
+      inlineMath: [['\\(', '\\)'], ['$', '$']],
+      displayMath: [['\\[', '\\]'], ['$$', '$$']],
+      processEscapes: true,
+      processEnvironments: true,
+      tags: 'ams',  // Enable equation numbering
+      tagSide: 'right',
+      tagIndent: '.8em',
+    },
+    options: {
+      ignoreHtmlClass: 'tex2jax_ignore',
+      processHtmlClass: 'tex2jax_process'
+    }
+  };
+  </script>
+  <script type="text/javascript" id="MathJax-script" defer
+    src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-svg.js">
+  </script>
+  
+  <style type="text/css">body {
+  font-family: "Times New Roman";
+  font-size: 10pt;
+  line-height: 1.2em;
+  max-width: 800px;
+  padding-left: 50px;
+  padding-right: 50px;
+}
+p {
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+hr {
+  display: none;
+}
+h1 {
+  font-size: 16pt;
+  text-align: center;
+  line-height: 1.2em;
+  margin-top: 20px;
+  border-top: 3px solid black;
+  border-bottom: 1px solid black;
+  padding-top: 20px;
+  padding-bottom: 20px;
+}
+h1 + p {
+  padding: 0 100px;
+  text-align: center;
+}
+h2 {
+  font-size: 14pt;
+  margin-top: 20px;
+  margin-bottom: 10px;
+}
+h2.abstract {
+  text-align: center;
+}
+h2.abstract + p {
+  padding: 0 50px;
+}
+th {
+  text-align: left;
+  padding-right: 10px;
+}
+td {
+  vertical-align: top;
+  border-top: 1px solid #DDDDDD;
+  padding-top: 10px;
+  padding-right: 10px;
+}
+ul, ol {
+  margin-top: 10px;
+}
+li {
+  margin-bottom: 10px;
+}
+</style>
+</head>
+<body>
+    <div id="content" class="tex2jax_process">
+        <h1>Rotational Attention Layers: Geometric-Algebraic Transformations within Transformer Architectures</h1>
+<p><strong>Author:</strong> Richard Vermillion<br />
+<strong>Date:</strong> 2025-10-22  </p>
+<hr />
+<h2 class="abstract">Abstract</h2>
+<p>We propose a modification to standard Transformer blocks wherein the value vector output of the attention mechanism
+is interpreted not as an additive residual update, but as a geometric rotation applied to the input representation.
+By framing attention as a rotor in geometric algebra (GA), we leverage the “sandwich” form \( R\,x\,\tilde R \) (or
+equivalently \( a\,b\,x\,b\,a \)) to perform rotation in high-dimensional embedding space without computing full
+\(N\times N\) rotation matrices. In practice we fix (or optionally learn) one reference vector \(a\) and let the
+attention output serve as \(b\), normalize appropriately, reflect/rotate the input \(x\), then pass through the
+subsequent MLP + residual path. We hypothesize that many semantic and numeric transformations—especially analogical
+and arithmetic relations—are naturally expressed as rotations rather than translations, and that providing an explicit
+rotational capability can reduce depth/parameter needs, improve interpretability, and better support tasks such as
+analogies and arithmetic reasoning (e.g., where numbers are embedded on helices). We detail the block design,
+initialization strategy (so as not to degrade pretrained models), and propose a set of ablation and evaluation
+experiments on analogy benchmarks and arithmetic tasks. We believe this rotational-layer hybrid (additive + rotational)
+is a promising direction for richer inductive biases in large language models (LLMs).</p>
+<h2>1. Introduction</h2>
+<p>The standard Transformer architecture (Vaswani et al., 2017) uses self-attention and additive residual updates via
+value vectors \(V\) combined with queries/keys. The residual update is of the form:</p>
+<p>\[
+x_{\rm out} = x_{\rm in} + \mathrm{MLP}(\mathrm{LayerNorm}(x_{\rm in} + \mathrm{SelfAttn}(x_{\rm in})))
+\]</p>
+<p>Although extremely powerful, this additive update paradigm treats attention output purely as a vector shift. We argue there is value in decoupling <em>directional re-orientation</em> from <em>magnitude shifts</em>. In particular:</p>
+<ul>
+<li>Many semantic relations (e.g., <em>king → queen</em>, <em>man → woman</em>) may behave more like rotations in embedding space: preserving norm, re-orienting direction rather than purely translating.</li>
+<li>Recent work on numeric reasoning in LLMs shows numbers are represented as helical embeddings and arithmetic corresponds to phase shifts (i.e., rotations) on that helix (Kantamneni &amp; Tegmark, 2025).</li>
+<li>By giving the model explicit rotational capacity, we might enable more efficient representation of structured transformations, reduce reliance on additive layers alone, and improve interpretability of learned latent geometry.</li>
+</ul>
+<p>We propose inserting <strong>rotational transformer blocks</strong> periodically within a standard architecture, so that the model has both rotational and additive operations available. Our implementation uses geometric algebra: we define a reference direction \(a\) (e.g., a fixed basis vector) and attention output \(b\) to form a rotor that rotates input \(x\). This avoids computing a full \(N\times N\) rotation matrix, maintaining computational efficiency.</p>
+<h2>2. Rotational Block Design</h2>
+<h3>2.1 Geometric Algebra Primer (very brief)</h3>
+<p>In geometric algebra (GA), a <em>rotor</em> \(R\) can be used to rotate a vector \(x\) by embedding \(x\) into a sandwich product:</p>
+<p>\[
+x \mapsto R\,x\,\widetilde{R}
+\]</p>
+<p>where \(\widetilde{R}\) is the reverse (conjugate) of \(R\). For a simple rotation in a plane spanned by orthonormal
+unit vectors \(a,b\), one can write:</p>
+<p>\[
+R = a\,b \Rightarrow R\,x\,\widetilde{R} = a\,b\,x\,b\,a.
+\]</p>
+<p>This performs a reflection of \(x\) in the plane perpendicular to \(b\), then a second reflection in the plane
+perpendicular to \(a\), which altogether yields a rotation in the plane spanned by \(a,b\). Importantly, this uses
+only vector-bivector algebra rather than constructing a full rotation matrix of size \(N\times N\).</p>
+<h3>2.2 Block Implementation</h3>
+<p>Let \(x \in \mathbb{R}^{d}\) (embedding dimension).</p>
+<ol>
+<li>Compute standard self-attention output \(b = \mathrm{SelfAttn}(\mathrm{LayerNorm}(x))\).</li>
+<li>Add a fixed reference direction: \(b_{\rm ref} = b + a\), where \(a\) is a fixed (or optionally learned) unit vector (e.g., basis vector \(e_0\)).</li>
+<li>Normalize \(b_{\rm ref}\): \(b \leftarrow b_{\rm ref} / |b_{\rm ref}|\).</li>
+<li>Reflect input \(x\) in direction \(b\): \( h = x - 2 (b \cdot x) b \).</li>
+<li>Flip sign of the reference component \(h[a\text{-dim}] \leftarrow -h[a\text{-dim}]\).</li>
+<li>Pass through MLP and residual: \( h_{\rm norm} = \mathrm{LayerNorm}(h) \), \( r = \mathrm{MLP}(h_{\rm norm}) \), \( \text{output} = h + r \).</li>
+</ol>
+<h3>2.3 Initialization for Compatibility with Pretrained Models</h3>
+<p>To avoid disrupting pretrained models:</p>
+<ul>
+<li>Initialize attention projection weights small so \(b \approx 0\).</li>
+<li>Then \(b + a \approx a\), and after normalization, \(b \approx a\), which makes the rotor a near-identity transformation.</li>
+<li>Thus, the block starts close to \(x \mapsto x\) and can be fine-tuned without destabilizing the model.</li>
+</ul>
+<h2>3. Rationale &amp; Hypotheses</h2>
+<h3>3.1 Semantic Analogue Transformations</h3>
+<p>Analogies often involve reorienting a subspace while preserving other properties. Rotational blocks may represent such analogies (e.g. gender, plurality) more naturally than additive residuals.</p>
+<h3>3.2 Numerical Reasoning and Helices</h3>
+<p>Work like Kantamneni &amp; Tegmark (2025) shows LLMs encode numbers as helices and perform addition as rotations. Our layers directly support such transformations.</p>
+<h3>3.3 Additional Degree of Freedom</h3>
+<p>In additive residuals, the same update is applied to all inputs. Rotational transformations depend on \(b \cdot x\), introducing a conditional transformation capacity.</p>
+<h3>3.4 Integration into Standard Architectures</h3>
+<p>Our blocks can be inserted periodically (e.g. every 7 layers) into standard transformer architectures, maintaining compatibility with existing models and training regimes.</p>
+<h2>4. Experimental Plan</h2>
+<h3>4.1 Model Setup</h3>
+<ul>
+<li>Baseline: transformer without rotational blocks.</li>
+<li>Experimental: insert 4 rotational layers into a 28-layer model (total 32). Only these layers are trained initially.</li>
+</ul>
+<h3>4.2 Tasks &amp; Datasets</h3>
+<p><strong>Analogy Tasks:</strong></p>
+<ul>
+<li>Google Analogy Dataset</li>
+<li>BATS (Bigger Analogy Test Set)</li>
+<li>SAT Analogy Questions</li>
+</ul>
+<p><strong>Arithmetic Tasks:</strong></p>
+<ul>
+<li>Multi-digit addition/subtraction (2, 4, 8 digits)</li>
+<li>Extrapolation to 10+ and 20+ digit arithmetic (self-generated)</li>
+<li>RL fine-tuning (e.g., DeepSeek R1-style curriculum/self-improvement)</li>
+</ul>
+<h3>4.3 Ablations</h3>
+<ul>
+<li>Fixed vs learnable reference vector \(a\)</li>
+<li>With vs without additive residuals</li>
+<li>Vary frequency/number of rotational blocks</li>
+</ul>
+<h3>4.4 Metrics</h3>
+<ul>
+<li>Accuracy on analogy and arithmetic datasets</li>
+<li>Extrapolation generalization gap</li>
+<li>Training efficiency and convergence speed</li>
+<li>Activation norm stability</li>
+<li>Interpretability of rotation planes</li>
+</ul>
+<h3>4.5 Hypotheses</h3>
+<ul>
+<li>Rotational layers improve analogy and arithmetic accuracy</li>
+<li>Generalization improves on longer-digit inputs</li>
+<li>Learnable \(a\) improves over fixed \(a\)</li>
+<li>Additive path is still useful (removal hurts)</li>
+<li>Rotational blocks yield more stable activation norms</li>
+</ul>
+<h2>5. Related Work</h2>
+<ul>
+<li>Vaswani et al. (2017) - Transformers</li>
+<li>Kantamneni &amp; Tegmark (2025) - Helical number representations</li>
+<li>Kobayashi et al. (2020) - Norms in attention</li>
+<li>Assaad et al. (2022) - Rotation-equivariant attention (VN-Transformers)</li>
+<li>Bounsi et al. (2024) - Neural algorithmic reasoning in transformers</li>
+<li>Lu &amp; Guo (2023) - Helix encodings in transformers</li>
+</ul>
+<h2>6. Risks &amp; Limitations</h2>
+<ul>
+<li>Limited rotation planes if \(a\) is fixed</li>
+<li>Instability if \(b\) is poorly conditioned (mitigated via normalization)</li>
+<li>Interpretation in high dimensions is difficult</li>
+<li>Additional compute cost (though minor)</li>
+</ul>
+<h2>7. Timeline</h2>
+<ol>
+<li>Implementation and verification (Weeks 0–4)</li>
+<li>Compatibility tests with frozen base (Weeks 4–6)</li>
+<li>Analogy task tuning and ablations (Weeks 6–12)</li>
+<li>Arithmetic extrapolation experiments (Weeks 12–20)</li>
+<li>Probing and interpretability (Weeks 20–24)</li>
+<li>Paper drafting and submission (Weeks 24–28)</li>
+</ol>
+<h2>8. Conclusion</h2>
+<p>We believe that enriching transformer architectures with explicit rotational capacity—via geometric-algebraic rotors built from attention output and a reference direction—offers a promising inductive bias for structured transformations, analogical reasoning, and numeric reasoning. The proposed block is efficient, integrates with existing models, and is easy to initialize near identity to avoid degradation. Through ablations and benchmark experiments we aim to test whether this approach yields tangible improvements.</p>
+<h2>References</h2>
+<ul>
+<li>Vaswani, A., et al. (2017). <em>Attention is All You Need</em>.</li>
+<li>Kobayashi, G., et al. (2020). <em>Attention is Not Only a Weight: Analyzing Transformers with Vector Norms</em>. EMNLP.</li>
+<li>Kantamneni, S., Tegmark, M. (2025). <em>Language Models Use Trigonometry to Do Addition</em>. arXiv preprint.</li>
+<li>Assaad, S., et al. (2022). <em>VN‑Transformer: Rotation‑Equivariant Attention for Vector Neurons</em>. NeurIPS Workshop.</li>
+<li>Bounsi, W., et al. (2024). <em>Transformers meet Neural Algorithmic Reasoners</em>. arXiv.</li>
+<li>Lu, JHJ., Guo, Q. (2023). <em>The Double Helix inside the NLP Transformer</em>.</li>
+</ul>
+    </div>
+</body>
+</html>
