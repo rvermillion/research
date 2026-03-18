@@ -1,33 +1,33 @@
 
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ploro</title>
-  
-  <script>
-  window.MathJax = {
-    tex: {
-      inlineMath: [['\\(', '\\)'], ['$', '$']],
-      displayMath: [['\\[', '\\]'], ['$$', '$$']],
-      processEscapes: true,
-      processEnvironments: true,
-      tags: 'ams',  // Enable equation numbering
-      tagSide: 'right',
-      tagIndent: '.8em',
-    },
-    options: {
-      ignoreHtmlClass: 'tex2jax_ignore',
-      processHtmlClass: 'tex2jax_process'
-    }
-  };
-  </script>
-  <script type="text/javascript" id="MathJax-script" defer
-    src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-svg.js">
-  </script>
-  
-  <style type="text/css">body {
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>ploro</title>
+      
+      <script>
+      window.MathJax = {
+        tex: {
+          inlineMath: [['\\(', '\\)'], ['$', '$']],
+          displayMath: [['\\[', '\\]'], ['$$', '$$']],
+          processEscapes: true,
+          processEnvironments: true,
+          tags: 'ams',  // Enable equation numbering
+          tagSide: 'right',
+          tagIndent: '.8em',
+        },
+        options: {
+          ignoreHtmlClass: 'tex2jax_ignore',
+          processHtmlClass: 'tex2jax_process'
+        }
+      };
+      </script>
+      <script type="text/javascript" id="MathJax-script" defer
+        src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-svg.js">
+      </script>
+      
+      <style type="text/css">body {
   font-family: "Times New Roman";
   font-size: 10pt;
   line-height: 1.2em;
@@ -84,99 +84,95 @@ li {
   margin-bottom: 10px;
 }
 </style>
-</head>
-<body>
-    <div id="content" class="tex2jax_process">
-        <h1>A Framework for Online, Purpose-Driven, Low-Rank Operator Learning</h1>
+    </head>
+    <body>
+        <div id="content" class="tex2jax_process">
+            <h1>A Framework for Online, Purpose-Driven, Low-Rank Operator Learning</h1>
 <p class="author"><strong>Richard Vermillion</strong><br /></p>
-<p>This document describes a general mechanism for learning an online, adaptive, low-rank operator surrogate<br />
-\(\tilde G \in \mathbb{R}^{P \times P}\)<br />
-structured as a linear autoencoder.</p>
-<p>Given a stream of high-dimensional vectors \(v_t \in \mathbb{R}^P\) (e.g., gradients, activations, Hessian-vector products), the goal is to learn a low-rank (\(R \ll P\)) operator \(\tilde G\) that is <strong>fit-for-purpose</strong>.</p>
-<p>Unlike streaming PCA—which only summarizes variance—this framework learns a subspace \(A\) that is explicitly trained to support a downstream task (e.g., preconditioning, dynamics prediction, relevance tracking, or continual learning).</p>
+<p>This document describes a general mechanism for learning an online, adaptive, low-rank operator surrogate $\tilde G \in \mathbb{R}^{P \times P}$ structured as a linear autoencoder.</p>
+<p>Given a stream of high-dimensional vectors $v_t \in \mathbb{R}^P$ (e.g., gradients, activations, Hessian-vector products), the goal is to learn a low-rank ($R \ll P$) operator $\tilde G$ that is <strong>fit-for-purpose</strong>.</p>
+<p>Unlike streaming PCA—which only summarizes variance—this framework learns a subspace $A$ that is explicitly trained to support a downstream task (e.g., preconditioning, dynamics prediction, relevance tracking, or continual learning).</p>
 <hr />
 <h1>1. The Learnable Operator Mechanism</h1>
-<p>The operator is parameterized by a rank-\(R\) linear autoencoder:</p>
+<p>The operator is parameterized by a rank-$R$ linear autoencoder:</p>
 <ul>
 <li>
 <p><strong>Encoder:</strong><br />
-  \(A \in \mathbb{R}^{R \times P}\)</p>
+  $A \in \mathbb{R}^{R \times P}$</p>
 </li>
 <li>
 <p><strong>Decoder:</strong><br />
-  \(A^\top \in \mathbb{R}^{P \times R}\)</p>
+  $A^\top \in \mathbb{R}^{P \times R}$</p>
 </li>
 <li>
 <p><strong>Latent Covariance:</strong><br />
-  \(H \in \mathbb{R}^{R \times R}\)</p>
+  $H \in \mathbb{R}^{R \times R}$</p>
 </li>
 </ul>
-<p>For each incoming vector \(v_t\):</p>
+<p>For each incoming vector $v_t$:</p>
 <ul>
 <li>
 <p><strong>Encode:</strong><br />
-  \(z_t = A v_t\)</p>
+  $z_t = A v_t$</p>
 </li>
 <li>
 <p><strong>Decode:</strong><br />
-  \(\hat v_t = A^\top z_t\)</p>
+  $\hat v_t = A^\top z_t$</p>
 </li>
 <li>
-<p><strong>Update latent covariance:</strong><br />
-  \\
-  \[
+<p><strong>Update latent covariance:</strong>
+  $$
   H \leftarrow (1 - \beta)\, H + \beta\, z_t z_t^\top
-  \]</p>
+  $$</p>
 </li>
 </ul>
 <p>The full operator is defined implicitly as:</p>
-<p>\[
+<p>$$
 \tilde G = A^\top H A.
-\]</p>
-<p>At no point is any \(P \times P\) matrix ever instantiated.</p>
+$$</p>
+<p>At no point is any $P \times P$ matrix ever instantiated.</p>
 <hr />
 <h1>2. The Composite Training Objective</h1>
 <p>This is the core of the framework.</p>
-<p>The autoencoder parameters \(A\) (and optionally a small latent model \(f\)) are trained using a <strong>composite loss</strong>:</p>
-<p>\[
-\mathcal{L}<em _text_recon="\text{recon">{\text{total}}
-= \mathcal{L}</em>
-+ \lambda_{\text{purpose}} \,\mathcal{L}_{\text{purpose}}.
-\]}</p>
+<p>The autoencoder parameters $A$ (and optionally a small latent model $f$) are trained using a <strong>composite loss</strong>:</p>
+<p>$$
+\mathcal{L}_{\text{total}}
+= \mathcal{L}_{\text{recon}} + \lambda_{\text{purpose}} \,\mathcal{L}_{\text{purpose}}.
+$$</p>
 <p>The reconstruction term anchors the subspace to the data.<br />
 The purpose term shapes the subspace to support the downstream operator.</p>
 <hr />
 <h2>2.1 Anchoring: The Reconstruction Loss</h2>
-<p>The reconstruction term ensures \(A\) remains a <em>meaningful</em> representation of the incoming vectors:</p>
-<p>\[
+<p>The reconstruction term ensures $A$ remains a <em>meaningful</em> representation of the incoming vectors:</p>
+<p>$$
 \mathcal{L}_{\text{recon}}
 = |\, v_t - A^\top A v_t \,|^2.
-\]</p>
+$$</p>
 <p>This prevents degenerate solutions (e.g., subspaces unrelated to the data) and provides stability.</p>
 <hr />
 <h2>2.2 Purpose: A Task-Aligned Loss</h2>
 <p>This is the programmable component. Examples include:</p>
 <h3><strong>Whitening (for preconditioning)</strong></h3>
 <p>Flatten the latent covariance spectrum:</p>
-<p>\[
+<p>$$
 \mathcal{L}_{\text{white}}
 = |\, H - \alpha I \,|_F^2,
 \quad
 \alpha = \tfrac{1}{R} \operatorname{tr}(H).
-\]</p>
+$$</p>
 <p>This encourages the operator to approximate a low-rank, stabilized preconditioner.</p>
 <hr />
 <h3><strong>Dynamics Prediction (for gradient flow modeling)</strong></h3>
 <p>Capture predictable evolution in the incoming vector stream:</p>
-<p>\[
-\mathcal{L}<em t_1="t+1">{\text{dyn}}
-= |\, v</em> - A^\top f(A v_t) \,|^2,
-\]</p>
-<p>where \(f\) is a <em>small</em> model in latent space (often linear: \(f(z) = M z\)).</p>
+<p>$$
+\mathcal{L}_{\text{dyn}}
+= |\, v_{t+1} - A^\top f(A v_t) \,|^2,
+$$</p>
+<p>where $f$ is a <em>small</em> model in latent space (often linear: $f(z) = M z$).</p>
 <p>This encourages the subspace to reflect “slow” or predictable directions in gradient drift.</p>
 <hr />
 <h3><strong>Task-Specific Purposes</strong></h3>
-<p>For different applications, \(\mathcal{L}_{\text{purpose}}\) can be designed to:</p>
+<p>For different applications, $\mathcal{L}_{\text{purpose}}$ can be designed to:</p>
 <ul>
 <li>
 <p><strong>Preserve old-task relevance</strong> (continual learning)<br />
@@ -197,22 +193,22 @@ The purpose term shapes the subspace to support the downstream operator.</p>
 <p>This is a <strong>bi-level system</strong>:</p>
 <ul>
 <li>The main model parameters are the <em>fast variables</em>.</li>
-<li>The subspace parameters \(A\) (and optionally \(f\)) are the <em>slow variables</em>.</li>
+<li>The subspace parameters $A$ (and optionally $f$) are the <em>slow variables</em>.</li>
 </ul>
 <p>Stability is achieved using standard meta-optimization practices:</p>
 <h3><strong>Slow Updates</strong></h3>
-<p>Update \(A\) infrequently (e.g., every \(N\) steps) or with a much smaller learning rate.</p>
+<p>Update $A$ infrequently (e.g., every $N$ steps) or with a much smaller learning rate.</p>
 <h3><strong>Smoothed Latent Covariance</strong></h3>
-<p>Update \(H\) using an exponential moving average for stability:</p>
-<p>\[
+<p>Update $H$ using an exponential moving average for stability:</p>
+<p>$$
 H \leftarrow (1 - \beta)H + \beta z_t z_t^\top.
-\]</p>
+$$</p>
 <h3><strong>Anchoring via Reconstruction</strong></h3>
-<p>\(\mathcal{L}_{\text{recon}}\) prevents the subspace from drifting into irrelevant regions of parameter space.</p>
+<p>$\mathcal{L}_{\text{recon}}$ prevents the subspace from drifting into irrelevant regions of parameter space.</p>
 <p>All computations remain efficient:</p>
 <ul>
-<li>\(O(PR)\) matrix–vector products,</li>
-<li>\(O(R^2)\) latent operations,</li>
+<li>$O(PR)$ matrix–vector products,</li>
+<li>$O(R^2)$ latent operations,</li>
 <li>No large matrices anywhere.</li>
 </ul>
 <hr />
@@ -221,7 +217,7 @@ H \leftarrow (1 - \beta)H + \beta z_t z_t^\top.
 <table>
 <thead>
 <tr>
-<th>Data Stream \(v_t\)</th>
+<th>Data Stream $v_t$</th>
 <th>Potential Application</th>
 </tr>
 </thead>
@@ -248,19 +244,20 @@ H \leftarrow (1 - \beta)H + \beta z_t z_t^\top.
 </tr>
 </tbody>
 </table>
-<p>The same encoder \(A\) + covariance \(H\) structure applies across all these contexts, with task behavior encoded in \(\mathcal{L}_{\text{purpose}}\).</p>
+<p>The same encoder $A$ + covariance $H$ structure applies across all these contexts, with task behavior encoded in $\mathcal{L}_{\text{purpose}}$.</p>
 <hr />
 <h1>5. Summary</h1>
 <p>This framework provides a scalable, online, and <em>programmable</em> method for learning a low-rank operator:</p>
-<p>\[
+<p>$$
 \tilde G = A^\top H A.
-\]</p>
+$$</p>
 <ul>
 <li><strong>Streaming PCA gives variance.</strong>  </li>
 <li><strong>This gives purpose.</strong></li>
 </ul>
 <p>By combining a reconstruction loss (for anchoring) with a custom, purpose-driven loss (for alignment), the system learns a subspace that is not merely descriptive but actively shaped for the downstream task.</p>
 <p>All operations rely only on standard deep-learning primitives (matrix–vector products, SGD/Adam), making the mechanism easy to implement and widely applicable in large-scale settings.</p>
-    </div>
-</body>
-</html>
+        </div>
+    </body>
+    </html>
+    

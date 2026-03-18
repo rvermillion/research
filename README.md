@@ -2,7 +2,7 @@
 
 **Richard Vermillion**
 Research Engineer · ML Systems Builder
-\
+<br>
 [richard@vermillion.nyc](mailto:richard@vermillion.nyc) · [GitHub](https://github.com/rvermillion) · [X @rivermillion](https://x.com/rivermillion) · [LinkedIn](https://linkedin.com/rvermillion)
 
 ---
@@ -40,24 +40,35 @@ A library for applying composable, behavior-preserving architectural patches to 
 Standard Transformers pay a linear memory tax as context grows. These proposals make forgetting a first-class, learned capability — compressing context without discarding signal.
 
 **One-Pass Forgetting** — A self-distillation framework where a lightweight "forget network" learns to predict token utility within a single forward pass, enabling dynamic KV-cache eviction. The goal: fixed-memory context processing at marginal quality cost.
+| [Source](https://github.com/rvermillion/research/tree/main/one_pass_forgetting) 
+| [Write Up](https://rvermillion.github.io/research/one_pass_forgetting.html)
 
-**Attention Dilution Fix** — Long-context retrieval degrades because irrelevant keys accumulate probability mass under softmax. A geometric correction — centering scores and scaling by √n — preserves the signal-to-noise ratio of relevant keys as context length grows.
+
+**Attention Antidilution** — Long-context retrieval degrades because irrelevant keys accumulate probability mass under softmax. A geometric correction — centering scores and scaling by √n — preserves the signal-to-noise ratio of relevant keys as context length grows.
 
 ### 2. Non-Bilinear & Rotational Architectures
 
 The bilinear dot-product is elegant but geometrically impoverished. These proposals explore richer similarity kernels and output transformations.
 
 **QANA (Query-As-Network Attention)** — Reinterprets the query vector as the weights of a micro-neural network that computes nonlinear compatibility scores with keys. This replaces the fixed bilinear form with a learned, input-dependent similarity kernel — allowing attention to express relationships that dot-products cannot.
+| [Source](https://github.com/rvermillion/research/tree/main/qana) 
+| [Write Up](https://rvermillion.github.io/research/qana.html)
 
 **Rotational Attention Layers** — Uses Geometric Algebra rotors to reinterpret attention output as a rotation in representation space rather than an additive residual shift. The sandwich product RxR̃ performs high-dimensional reorientation, preserving norm while enabling richer representational transformations.
+| [Source](https://github.com/rvermillion/research/tree/main/rotation) 
+| [Write Up](https://rvermillion.github.io/research/rotational-transformer.html)
 
 ### 3. Adaptive Operators & Credit Assignment
 
 Models need better mechanisms for learning over long horizons and adapting their own internal operators online.
 
 **RRET (Read-Refreshed Eligibility Traces)** — A hybrid BPTT/eligibility-trace approach where credit traces are updated only when memories are retrieved, aligning temporal credit assignment with semantic relevance rather than recency.
+| [Source](https://github.com/rvermillion/research/tree/main/rret) 
+| [Write Up](https://rvermillion.github.io/research/rret.html)
 
 **Purpose-Driven Low-Rank Operators (PLoRO)** — A framework for learning online, adaptive low-rank subspaces structured as linear autoencoders, explicitly trained to support downstream objectives like gradient preconditioning. Early experiments show faster convergence and improved training stability compared to standard approaches.
+| [Source](https://github.com/rvermillion/research/tree/main/ploro) 
+| [Write Up](https://rvermillion.github.io/research/ploro.html)
 
 **Head Preconditioning** — A two-phase LM head update scheme inspired by recent work on gradient bottlenecks, implemented as an instrumentation plugin (`HeadPreconditionInstrument` in `tensile.extra`). The head is preconditioned in a fast initial phase before full-model training begins, reducing early gradient pathology.
 

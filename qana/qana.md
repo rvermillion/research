@@ -71,23 +71,23 @@ properties of SDPA—efficiency, rotational equivariance for positional encoding
 
 ---
 
-## 3 Query-Parameterized Scoring Function
+## 3 Query-Parameterized Scoring Function
 
-### 3.1 Definition
+### 3.1 Definition
 
 QANA augments the standard dot-product attention with a query-parameterized MLP that operates on each key. Crucially,
 we retain the original SDPA computation as a skip connection, ensuring that at initialization, QANA behaves identically
 to standard attention. For each query $q_i$ and key $k_j\in\mathbb{R}^{D_K}$, QANA defines the scoring function as:
 $$
 \text{score}(q_i, k_j)
-= \frac{\widetilde{s}\_{i}^\top k\_j}{\sqrt{D\_K}}
-+ V\_{i}\,\sigma(\widetilde{U}\_{i} k\_j + b\_{i}) + c\_{i},
+= \frac{\widetilde{s}_{i}^\top k_j}{\sqrt{D_K}}
++ V_{i}\,\sigma(\widetilde{U}_{i} k_j + b_{i}) + c_{i},
 $$
 
 The scoring function consists of two components:
 
 - Skip connection: $\frac{\widetilde{s}_{i}^\top k_j}{\sqrt{D_K}}$ preserves the standard SDPA computation
-- Nonlinear term: $V\_{i}\,\sigma(\widetilde{U}\_{i} k\_j + b\_{i}) + c\_{i}$ adds query-specific nonlinear scoring
+- Nonlinear term: $V_{i}\,\sigma(\widetilde{U}_{i} k_j + b_{i}) + c_{i}$ adds query-specific nonlinear scoring
   capacity. The tildes indicate RoPE-encoded vectors, which we discuss in Section 3.3.
 
 ### 3.2 Query Slicing
@@ -148,7 +148,7 @@ supports RoPE, the MLP path requires careful treatment.
 We apply standard **rotary positional encoding** (RoPE) to each linear skip query $s_i$:
 
 $$
-\widetilde{s}_i = \text{RoPE}\_i(s_i),
+\widetilde{s}_i = \text{RoPE}_i(s_i),
 $$
 
 This ensures the skip connection maintains the same relative positional dependence as standard SDPA.
@@ -159,26 +159,26 @@ This ensures the skip connection maintains the same relative positional dependen
 naturally encoding relative position $(j - i)$. However, arbitrary MLPs lack this invariance. So how do we preserve
 relative position information in query-parameterized scoring?
 
-**Solution**: We observe that the first hidden layer computation $U\_{i} k\_j$ can be decomposed into $h$ individual
+**Solution**: We observe that the first hidden layer computation $U_{i} k_j$ can be decomposed into $h$ individual
 dot products — one per row of $U_i$:
 $$
-[U\_{i} k\_j]\_\ell = (U\_{i})\_\ell^\top k\_j.
+[U_{i} k_j]_\ell = (U_{i})_\ell^\top k_j.
 $$
 
 Since each dot product is independently subject to rotational invariance, we can encode relative position by applying
-RoPE **row-wise** to $U\_{i}$ (using query position $i$), while encoding $k_j$ with its position $j$:
+RoPE **row-wise** to $U_{i}$ (using query position $i$), while encoding $k_j$ with its position $j$:
 $$
-\widetilde{U}\_{i} = \text{RoPE}\_i(U\_{i}), \quad \widetilde{k}\_j = \text{RoPE}\_j(k\_j).
+\widetilde{U}_{i} = \text{RoPE}_i(U_{i}), \quad \widetilde{k}_j = \text{RoPE}_j(k_j).
 $$
 
 **Key Property**: Because RoPE applies orthogonal rotations, each row-wise dot product is preserved:
 $$
-(U_{i})\_\ell^\top k\_j = (\widetilde{U}\_{i})\_\ell^\top \widetilde{k}\_j,
+(U_{i})_\ell^\top k_j = (\widetilde{U}_{i})_\ell^\top \widetilde{k}_j,
 $$
 
 This means the entire hidden layer computation retains relative position dependence:
 $$
-U\_{i} k\_j = \widetilde{U}\_{i} \widetilde{k}\_j.
+U_{i} k_j = \widetilde{U}_{i} \widetilde{k}_j.
 $$
 
 The subsequent nonlinearity and output projection $V$ then operate on these position-aware hidden activations,
@@ -200,7 +200,7 @@ Extend $W_Q$ so it outputs $D_Q = D_K + (hD_K + 2h + 1)$ instead of $D_K$.
 This ensures the nonlinear portion of QANA initially contributes nothing.
 2. **Preserve the baseline function.**  
 Because the added rows of $W_Q$ are zero, the extra slices $U_{i}, b_{i}, V_{i}, c_{i}$ are all zero for every query.
-The nonlinear term $V\_{i}\,\sigma(\widetilde{U}\_{i} k\_j + b\_{i}) + c\_{i}$ therefore vanishes, leaving the pure
+The nonlinear term $V_{i}\,\sigma(\widetilde{U}_{i} k_j + b_{i}) + c_{i}$ therefore vanishes, leaving the pure
 SDPA term.
 3. **Apply RoPE consistently.**  
     - Apply standard RoPE to both $s$ and $k$.

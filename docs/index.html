@@ -1,0 +1,140 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>README</title>
+  
+    <script>
+        window.MathJax = {
+            tex: {
+              inlineMath: [['\\(', '\\)'], ['$', '$']],
+              displayMath: [['\\[', '\\]'], ['$$', '$$']],
+              processEscapes: true,
+              processEnvironments: true,
+              tags: 'ams',  // Enable equation numbering
+              tagSide: 'right',
+              tagIndent: '.8em',
+            },
+            options: {
+              ignoreHtmlClass: 'tex2jax_ignore',
+              processHtmlClass: 'tex2jax_process'
+            }
+        };
+    </script>
+    <script type="text/javascript" id="MathJax-script" defer src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-svg.js">
+    </script>
+    
+  <style type="text/css">body {
+  font-family: "Times New Roman";
+  font-size: 10pt;
+  line-height: 1.2em;
+  max-width: 800px;
+  padding-left: 50px;
+  padding-right: 50px;
+}
+p {
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+hr {
+  display: none;
+}
+h1 {
+  font-size: 16pt;
+  text-align: center;
+  line-height: 1.2em;
+  margin-top: 20px;
+  border-top: 3px solid black;
+  border-bottom: 1px solid black;
+  padding-top: 20px;
+  padding-bottom: 20px;
+}
+h1 + p {
+  padding: 0 100px;
+  text-align: center;
+}
+h2 {
+  font-size: 14pt;
+  margin-top: 20px;
+  margin-bottom: 10px;
+}
+h2.abstract {
+  text-align: center;
+}
+h2.abstract + p {
+  padding: 0 50px;
+}
+th {
+  text-align: left;
+  padding-right: 10px;
+}
+td {
+  vertical-align: top;
+  border-top: 1px solid #DDDDDD;
+  padding-top: 10px;
+  padding-right: 10px;
+}
+ul, ol {
+  margin-top: 10px;
+}
+li {
+  margin-bottom: 10px;
+}
+</style>
+</head>
+<body>
+    <div id="content" class="tex2jax_process">
+        <h1>ML Systems &amp; Representation Research</h1>
+<p><strong>Richard Vermillion</strong>
+Research Engineer · ML Systems Builder
+<br>
+<a href="mailto:richard@vermillion.nyc">richard@vermillion.nyc</a> · <a href="https://github.com/rvermillion">GitHub</a> · <a href="https://x.com/rivermillion">X @rivermillion</a> · <a href="https://linkedin.com/rvermillion">LinkedIn</a></p>
+<hr />
+<h2>Overview</h2>
+<p>I build tools and architectures that challenge standard Transformer assumptions. My work sits at the intersection of low-level systems engineering and high-level architectural theory — implementing ideas end-to-end, from custom training frameworks down to gradient flow, across multiple hardware backends.</p>
+<p>My research intuitions are shaped by cross-disciplinary work in geometric algebra, philosophy of mind, and dynamical systems theory. The proposals below reflect a consistent thesis: that the next generation of efficient, adaptive models will come from rethinking the primitive operations — attention scoring, memory retention, credit assignment — not from scaling the existing ones.</p>
+<hr />
+<h2>Core Tooling</h2>
+<p>Research moves at the speed of infrastructure. These libraries are the scaffolding for everything below.</p>
+<h3><a href="https://github.com/rvermillion/tensile">tensile</a></h3>
+<p>A dual-backend ML framework abstracting PyTorch and MLX. Write once, train on CUDA or Apple Silicon — tensile hides the semantic gap between eager and lazy execution models, unifies optimizer abstractions across backends, and provides a composable instrumentation architecture for training diagnostics.</p>
+<p><em>Status: Published on GitHub. Training experiments validated on WikiText-103 (nanollama), confirming trajectory consistency across backends.</em></p>
+<h3><a href="https://github.com/rvermillion/patchlm">patchlm</a></h3>
+<p>A library for applying composable, behavior-preserving architectural patches to pretrained LLMs. Every patch is initialized to identity, so you can fine-tune novel architectural ideas on top of existing weights without catastrophic divergence. Think of it as a surgical toolkit for modifying the internals of a running model.</p>
+<p><em>Status: In active development.</em></p>
+<hr />
+<h2>Research Directions</h2>
+<h3>1. Efficient Context &amp; Learned Forgetting</h3>
+<p>Standard Transformers pay a linear memory tax as context grows. These proposals make forgetting a first-class, learned capability — compressing context without discarding signal.</p>
+<p><strong>One-Pass Forgetting</strong> — A self-distillation framework where a lightweight "forget network" learns to predict token utility within a single forward pass, enabling dynamic KV-cache eviction. The goal: fixed-memory context processing at marginal quality cost.
+| <a href="https://github.com/rvermillion/research/tree/main/one_pass_forgetting">Source</a> 
+| <a href="https://rvermillion.github.io/research/one_pass_forgetting.html">Write Up</a></p>
+<p><strong>Attention Antidilution</strong> — Long-context retrieval degrades because irrelevant keys accumulate probability mass under softmax. A geometric correction — centering scores and scaling by √n — preserves the signal-to-noise ratio of relevant keys as context length grows.</p>
+<h3>2. Non-Bilinear &amp; Rotational Architectures</h3>
+<p>The bilinear dot-product is elegant but geometrically impoverished. These proposals explore richer similarity kernels and output transformations.</p>
+<p><strong>QANA (Query-As-Network Attention)</strong> — Reinterprets the query vector as the weights of a micro-neural network that computes nonlinear compatibility scores with keys. This replaces the fixed bilinear form with a learned, input-dependent similarity kernel — allowing attention to express relationships that dot-products cannot.
+| <a href="https://github.com/rvermillion/research/tree/main/qana">Source</a> 
+| <a href="https://rvermillion.github.io/research/qana.html">Write Up</a></p>
+<p><strong>Rotational Attention Layers</strong> — Uses Geometric Algebra rotors to reinterpret attention output as a rotation in representation space rather than an additive residual shift. The sandwich product RxR̃ performs high-dimensional reorientation, preserving norm while enabling richer representational transformations.
+| <a href="https://github.com/rvermillion/research/tree/main/rotation">Source</a> 
+| <a href="https://rvermillion.github.io/research/rotational-transformer.html">Write Up</a></p>
+<h3>3. Adaptive Operators &amp; Credit Assignment</h3>
+<p>Models need better mechanisms for learning over long horizons and adapting their own internal operators online.</p>
+<p><strong>RRET (Read-Refreshed Eligibility Traces)</strong> — A hybrid BPTT/eligibility-trace approach where credit traces are updated only when memories are retrieved, aligning temporal credit assignment with semantic relevance rather than recency.
+| <a href="https://github.com/rvermillion/research/tree/main/rret">Source</a> 
+| <a href="https://rvermillion.github.io/research/rret.html">Write Up</a></p>
+<p><strong>Purpose-Driven Low-Rank Operators (PLoRO)</strong> — A framework for learning online, adaptive low-rank subspaces structured as linear autoencoders, explicitly trained to support downstream objectives like gradient preconditioning. Early experiments show faster convergence and improved training stability compared to standard approaches.
+| <a href="https://github.com/rvermillion/research/tree/main/ploro">Source</a> 
+| <a href="https://rvermillion.github.io/research/ploro.html">Write Up</a></p>
+<p><strong>Head Preconditioning</strong> — A two-phase LM head update scheme inspired by recent work on gradient bottlenecks, implemented as an instrumentation plugin (<code>HeadPreconditionInstrument</code> in <code>tensile.extra</code>). The head is preconditioned in a fast initial phase before full-model training begins, reducing early gradient pathology.</p>
+<hr />
+<h2>Background</h2>
+<p>I've been building AI systems since 1991, when I wrote tree-based neural networks for space shuttle telemetry anomaly detection at NASA Johnson Space Center. My formal training is in aerospace engineering (Princeton BSE), and my ML/AI expertise is self-directed — built through two decades of applied work followed by a return to architecture-level research.</p>
+<p>I believe the most productive work in AI right now happens when you hold the theory and the implementation in your head at the same time. That's what this repository is for.</p>
+<hr />
+<p><em>This is a living document. Research proposals are at varying stages of development — from formal writeups to working implementations in tensile. If any of this resonates, I'd welcome a conversation: <a href="mailto:richard@vermillion.nyc">richard@vermillion.nyc</a></em></p>
+    </div>
+</body>
+</html>
