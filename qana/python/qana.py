@@ -1,6 +1,6 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
 
-from tensile.nn.common import *
+from tensile.common import *
 from tensile.nn.module import CompiledModule, Module, ModuleArgs
 from tensile.nn.attention import AttentionArgs
 from tensile.nn.attention.mask import AttentionMasker, make_additive_masker

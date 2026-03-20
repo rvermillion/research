@@ -1,7 +1,7 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
 import math
 
-from tensile.nn.common import Callable, Optional, Array, ten
+from tensile.common import Callable, Optional, Array, ten
 from tensile.graph.common import Base
 from tensile.graph.util import show_array
 

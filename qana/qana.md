@@ -307,4 +307,4 @@ dot-product similarity is the optimal foundation for all attention computations.
 5. Press et al., *Train Short, Test Long: Attention with Linear Biases*, arXiv:2108.12409.  
 6. Bahdanau et al., *Neural Machine Translation by Jointly Learning to Align and Translate*, ICLR 2015.  
 7. Jaegle et al., *Perceiver: General Perception with Iterative Attention*, ICML 2021.  
-8. Fedus et al., *Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity*, JMLR 2022.  
+8. Fedus et al., *SwitchModule Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity*, JMLR 2022.  
