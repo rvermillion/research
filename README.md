@@ -66,7 +66,7 @@ Models need better mechanisms for learning over long horizons and adapting their
 | [Source](https://github.com/rvermillion/research/tree/main/rret) 
 | [Write Up](https://rvermillion.github.io/research/rret.html)
 
-**Purpose-Driven Low-Rank Operators (PLoRO)** — A framework for learning online, adaptive low-rank subspaces structured as linear autoencoders, explicitly trained to support downstream objectives like gradient preconditioning. Early experiments show faster convergence and improved training stability compared to standard approaches.
+**Purpose-Driven Low-Rank Operators (PLoRO)** — A framework for learning online, adaptive low-rank subspaces structured as linear autoencoders, explicitly trained to support downstream objectives like gradient preconditioning.
 | [Source](https://github.com/rvermillion/research/tree/main/ploro) 
 | [Write Up](https://rvermillion.github.io/research/ploro.html)
 
