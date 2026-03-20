@@ -1,8 +1,8 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
 
-from tensile.nn.common import *
+from tensile.common import *
 from tensile.nn.module import ModuleArgs
-from tensile.nn.attention.attend import Attend, DefaultAttend
+from tensile.nn.attention.attend import Attend, CustomAttend
 from tensile.nn.attention.score import AttentionScores
 
 
@@ -10,7 +10,7 @@ default_initial_beta = -20.
 
 
 @provides(Attend, 'grounded')
-class AttendWithGround(DefaultAttend):
+class AttendWithGround(CustomAttend):
 
     __slots__ = ('betas', 'ground_values')
 
