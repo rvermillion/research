@@ -74,7 +74,8 @@ $$
 \begin{aligned}
 s_{ij} &= q^s_i \cdot k^s_j && \text{(semantic score)} \\
 g_{ij} &= q^g_i \cdot k^g_j && \text{(gate score)} \\
-a_{ij} &= \lambda_i s_{ij} - \beta_i \, \mathrm{softplus}(-g_{ij}) && \text{(gated logit)} \\
+m_{ij} &= (1 + \mathrm{softplus}(\alpha_i) \log{K})(s_{ij} - \gamma_i) - \mathrm{softplus}(\beta_i) \, \mathrm{softplus}(-g_{ij}) &&  \text{(score margin)} \\
+a_{ij} &= \gamma_i + m_{ij} && \text{(gated logit)} \\
 z_i &= \sum_{j=1}^{K} e^{\max(\gamma_i,\, a_{ij})} && \text{(normalizer)} \\
 w_{ij} &= \frac{e^{a_{ij}}}{z_i} && \text{(attention weight)} \\
 w_{i0} &= 1 - \sum_{j=1}^{K} w_{ij} && \text{(ground weight)} \\
@@ -82,7 +83,17 @@ o_i &= w_{i0}\, v_0 + \sum_{j=1}^{K} w_{ij}\, v_j && \text{(output)}
 \end{aligned}
 $$
 
-where $\beta_i$ is a learned gating strength, $\gamma_i$ is a learned ground bias, $\lambda_i$ is a scaling factor, and $v_0$ is a learned ground value.
+where $\beta_i$ is a learned gating strength, $\gamma_i$ is a learned ground bias, $\alpha_i$ is a margin amplification factor, and $v_0$ is a learned ground value.
+
+The attention margin, $m_{ij}$, decomposes into two additive terms in log-space:
+$$
+m_{ij}
+=
+\underbrace{(1+\mathrm{softplus}(\alpha_i) \log K)(s_{ij}-\gamma_i)}_{\text{margin amplification}}
+\;-\;
+\underbrace{\mathrm{softplus}(\beta_i)\,\mathrm{softplus}(-g_{ij})}_{\text{gate suppression}}
+$$
+This decomposition gives the mechanism a clean interpretation. The first term amplifies semantic evidence relative to the learned ground reference, counteracting the growing burden of proof in longer contexts. The second term subtracts a nonnegative suppressive penalty based on the gate signal. Because both terms act additively in log-space, they combine in a common currency: semantic evidence raises a key’s claim on attention, while gating can only reduce that claim, not create it.
 
 ### 3.2 How Each Component Addresses a Problem
 
@@ -97,35 +108,35 @@ The behavior of the gate is best understood through three regimes. When $g_{ij}$
  
 This makes $\beta_i$ interpretable: it controls how much the model penalizes gate indifference relative to gate alignment. For $\beta_i = 1$, an indifferent key has its logit reduced by $\log(2) \approx 0.69$ compared to an aligned key — a modest but meaningful suppression. Larger $\beta_i$ makes the model more demanding of explicit gate alignment before letting a key through. In this sense, $\beta_i$ is not merely a "gating strength" but a knob that sets the threshold between "I don't recognize this key" and "I recognize and accept this key," allowing the model to express "semantically relevant but contextually suppressed" without distorting the semantic projection space.
 
+This decomposition should be viewed as one principled point in a broader design space of grounded and decomposed attention mechanisms. We focus on the asymmetric suppress-only variant because it preserves a clean separation of roles: semantic projections propose relevance, gates modulate confidence in that proposal by suppressing unreliable matches, and the ground state handles fallback behavior when no key sufficiently earns attention. Other designs could allow gates to both suppress and promote attention. We do not rule out such variants. We focus on suppress-only gating because promotion would re-entangle structural modulation with semantic relevance scoring, reducing interpretability and introducing redundant pathways for increasing attention logits.
+
 #### 3.2.3 Sequence length scaling via $\lambda_i = \frac{\log(K)}{\sqrt{d}}$
-Addressing §2.3, we multiply the usual scaling factor by $\log(K)$. This factor, applied to the semantic score, counteracts the growth of the softmax denominator as $K$ increases. As the number of keys grows, $\sum_j e^{s_{ij}}$ grows roughly as $K$ (in expectation, for random keys), which dilutes individual weights by a factor of $\sim 1/K$. Multiplying the logits by $\lambda_i \log(K)$ effectively raises the exponents by a factor of $\lambda_i \log(K)$, counteracting the $K$-fold growth of the denominator. This is the minimal correction that preserves the relative ordering of attention weights while restoring approximate scale invariance across sequence lengths, while incorporating the $1/\sqrt{d}$ correction for embedding dimension.
+Addressing §2.3, we multiply the usual scaling factor by $\log(K)$. This factor, applied to the semantic score, counteracts the growth of the softmax denominator as $K$ increases. As the number of keys grows, $\sum_j e^{s_{ij}}$ grows roughly as $K$ (in expectation, for random keys), which dilutes individual weights by a factor of $\sim 1/K$. Multiplying the margin by $\mathrm{softplus}(\alpha_i) \log(K)$ effectively raises the exponents by a factor of $\alpha_i \log(K)$, counteracting the $K$-fold growth of the denominator. This is the minimal correction that preserves the relative ordering of attention weights while restoring approximate scale invariance across sequence lengths,.
 
 ### 3.3 Relationship to Standard Attention
 
-Standard scaled dot-product attention is recovered as the special case:
+Standard softmax scaled dot-product attention is recovered in the limit as:
 
-- $\beta_i = 0$ — no gating; the gate projections are unused and $a_{ij} = s_{ij}$
-- $\gamma_i = -\infty$ — no ground state; $\max(\gamma_i, a_{ij}) = a_{ij}$, so $z_i = \sum_j e^{a_{ij}}$ and $w_{i0} = 0$
-- $\lambda_i = \frac{1}{\sqrt{d}}$ — the scaling factor is set to provide no scaling based on the sequence length, just based on the embedding dimension.
+- $\alpha_i \to -\infty$ — no sequence length margin amplification 
+- $\beta_i \to -\infty$ — no gating; the gate projections are unused
+- $\gamma_i \to -\infty$ — no ground state bias to overcome
 
-This means principled attention is a *strict generalization* — any model that uses standard attention can be initialized to equivalent behavior, and the additional components can be gradually learned during training.
+This means principled attention is a *generalization* — any model that uses standard attention can be initialized to equivalent behavior, and the additional components can be gradually learned during training.
 
 ---
 
 ## 4. Variants and Ablation Structure
 
-Each of the four new components — $\beta_i$, $\gamma_i$, $\lambda_i$, and $v_0$ — can be parameterized at different levels of expressiveness:
+Each of the four new components — $\beta_i$, $\gamma_i$, $\alpha_i$, and $v_0$ — can be parameterized at different levels of expressiveness:
 
-| Component | Constant                                                                 | Per-Layer                | Per-Head | Per-Query |
-|-----------|--------------------------------------------------------------------------|--------------------------|----------|-----------|
-| $\beta$ (gating strength) | Hyperparameter                                                           | Learned scalar per layer | Learned scalar per head | Learned from $q_i$ |
-| $\gamma$ (ground bias) | Hyperparameter                                                           | Learned scalar per layer | Learned scalar per head | Learned from $q_i$ |
-| $\lambda$ (scaling factor) | Hyperparameter (e.g. $\frac{\log{K}}{\sqrt{d}}$) | Learned scalar per layer | Learned scalar per head | Learned from $q_i$ |
-| $v_0$ (ground value) | Fixed (e.g., zero)                                                       | Learned vector per layer | Learned vector per head | — |
+| Component                              | Constant                                                                | Per-Layer                | Per-Head | Per-Query |
+|----------------------------------------|-------------------------------------------------------------------------|--------------------------|----------|-----------|
+| $\beta$ (gating strength)              | Hyperparameter                                                          | Learned scalar per layer | Learned scalar per head | Learned from $q_i$ |
+| $\gamma$ (ground bias)                 | Hyperparameter                                                          | Learned scalar per layer | Learned scalar per head | Learned from $q_i$ |
+| $\alpha$ (length amplification factor) | Hyperparameter) | Learned scalar per layer | Learned scalar per head | Learned from $q_i$ |
+| $v_0$ (ground value)                   | Fixed (e.g., zero)                                                      | Learned vector per layer | Learned vector per head | — |
 
-Standard attention occupies the corner $\beta = 0$, $\gamma = -\infty$, $\lambda = \frac{1}{\sqrt{d}}$, $v_0$ irrelevant. The per-query variants of $\beta_i$ and $\gamma_i$ are the most expressive, allowing the model to learn content-dependent selectivity: "this query should be highly selective" versus "this query should spread attention broadly and rely on the ground state." The per-head variants may capture the majority of the benefit at lower parameter cost.
-
-The selection of $\lambda_i = \frac{\log(K)}{\sqrt{d}}$ is the most principled.
+Standard softmax is recovered in the limit $\alpha, \beta, \gamma \to -\infty$, and $v_0$ irrelevant. The per-query variants of $\beta_i$ and $\gamma_i$ are the most expressive, allowing the model to learn content-dependent selectivity: "this query should be highly selective" versus "this query should spread attention broadly and rely on the ground state." The per-head variants may capture the majority of the benefit at lower parameter cost.
 
 The ground value $v_0$ is unlikely to benefit from per-query parameterization, as it represents a head-level concept: "what to output when nothing is relevant."
 
