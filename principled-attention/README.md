@@ -1,0 +1,6 @@
+# Principled Attention
+
+This is a work in progress.  Read the full draft write up [here](https://rvermillion.github.io/research/principled-attention.html).
+
+## Abstract
+Standard scaled dot-product attention makes three implicit assumptions that limit the expressiveness of transformer architectures: (1) all attention mass must be distributed across keys, even when no key is relevant; (2) a single bilinear score conflates semantic relevance with selection; and (3) attention weights dilute as sequence length grows, degrading signal fidelity in long contexts. We introduce *principled attention*, a strict generalization of standard attention that addresses each limitation through a minimal, orthogonal extension. A learned *ground state* $v_0$ with per-query bias $\gamma_i$ allows the model to explicitly attend to "nothing." A *gating mechanism* decomposes query-key interaction into separate semantic and gate projections, enabling suppression without demotion. A $\lambda_i$ scaling term restores scale invariance across sequence lengths, by introducing a $\log{K}$ factor. Standard attention is recovered as the special case $\beta_i = 0$, $\gamma_i = -\infty$, $\lambda_i = \frac{1}{\sqrt{d}}$.

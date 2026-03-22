@@ -35,28 +35,34 @@ A library for applying composable, behavior-preserving architectural patches to 
 
 ## Research Directions
 
-### 1. Efficient Context & Learned Forgetting
 
-Standard Transformers pay a linear memory tax as context grows. These proposals make forgetting a first-class, learned capability — compressing context without discarding signal.
-
-**One-Pass Forgetting** — A self-distillation framework where a lightweight "forget network" learns to predict token utility within a single forward pass, enabling dynamic KV-cache eviction. The goal: fixed-memory context processing at marginal quality cost.
-| [Source](https://github.com/rvermillion/research/tree/main/one_pass_forgetting) 
-| [Write Up](https://rvermillion.github.io/research/one_pass_forgetting.html)
-
-
-**Attention Antidilution** — Long-context retrieval degrades because irrelevant keys accumulate probability mass under softmax. A geometric correction — centering scores and scaling by √n — preserves the signal-to-noise ratio of relevant keys as context length grows.
-
-### 2. Non-Bilinear & Rotational Architectures
+### 1. Next Generation Attention
 
 The bilinear dot-product is elegant but geometrically impoverished. These proposals explore richer similarity kernels and output transformations.
+
+**Principled Attention** — Proposes a principled generalization of standard Scaled Dot Product Attention that addresses many of its weaknesses by adding gated logits, a learned ground state and sequence length scaling. | Source in progress.
+| [Write Up](https://rvermillion.github.io/research/principled-attention.html)
+
+**Coordinate Attention** — Proposes replacing RoPE with Principled Attention using an attention gate provided by out-of-band "coordinate" vector that encodes the relative position of each token in addition to other "coordinates" such as wall-clock time and token provenance (i.e. self/other, system prompt, speaker, source sensor, etc.). Work in progress.
+| [Write Up](https://rvermillion.github.io/research/coordinate-attention.html)
 
 **QANA (Query-As-Network Attention)** — Reinterprets the query vector as the weights of a micro-neural network that computes nonlinear compatibility scores with keys. This replaces the fixed bilinear form with a learned, input-dependent similarity kernel — allowing attention to express relationships that dot-products cannot.
 | [Source](https://github.com/rvermillion/research/tree/main/qana) 
 | [Write Up](https://rvermillion.github.io/research/qana.html)
 
 **Rotational Attention Layers** — Uses Geometric Algebra rotors to reinterpret attention output as a rotation in representation space rather than an additive residual shift. The sandwich product RxR̃ performs high-dimensional reorientation, preserving norm while enabling richer representational transformations.
-| [Source](https://github.com/rvermillion/research/tree/main/rotation) 
+| [Source](https://github.com/rvermillion/research/tree/main/rotational-transformer) 
 | [Write Up](https://rvermillion.github.io/research/rotational-transformer.html)
+
+### 2. Efficient Context & Learned Forgetting
+
+Standard Transformers pay a linear memory tax as context grows. These proposals make forgetting a first-class, learned capability and segment the context — compressing context without discarding signal.
+
+**One-Pass Forgetting** — A self-distillation framework where a lightweight "forget network" learns to predict token utility within a single forward pass, enabling dynamic KV-cache eviction. The goal: fixed-memory context processing at marginal quality cost.
+| [Source](https://github.com/rvermillion/research/tree/main/one-pass-forgetting) 
+| [Write Up](https://rvermillion.github.io/research/one-pass-forgetting.html)
+
+**Segmented Key/Value Cache** — A memory-efficient KV cache that segments memory into variable-size chunks, with a first attention pass running against a "segment key" to determine whether the segment should be attended to or skipped.  We design a key/value cache with a configurable "Segment Breaker" policy and "Key Pooler" strategy and show results for a simple policy that segments the cache into fixed-length chunks (64 tokens) and uses a simple max/min key pooling strategy, demonstrating substantial attention savings with minimal loss in model coherence, even bolted on to pre-trained models. Code is a work in progress, write up forthcoming.
 
 ### 3. Adaptive Operators & Credit Assignment
 

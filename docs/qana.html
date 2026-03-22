@@ -1,34 +1,33 @@
 
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>qana</title>
-
-      <script>
-      window.MathJax = {
-        tex: {
-          inlineMath: [['\\(', '\\)'], ['$', '$']],
-          displayMath: [['\\[', '\\]'], ['$$', '$$']],
-          processEscapes: true,
-          processEnvironments: true,
-          tags: 'ams',  // Enable equation numbering
-          tagSide: 'right',
-          tagIndent: '.8em',
-        },
-        options: {
-          ignoreHtmlClass: 'tex2jax_ignore',
-          processHtmlClass: 'tex2jax_process'
-        }
-      };
-      </script>
-      <script type="text/javascript" id="MathJax-script" defer
-        src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-svg.js">
-      </script>
-
-      <style type="text/css">body {
-  font-family: "Times New Roman";
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>qana</title>
+  
+    <script>
+        window.MathJax = {
+            tex: {
+              inlineMath: [['\\(', '\\)'], ['$', '$']],
+              displayMath: [['\\[', '\\]'], ['$$', '$$']],
+              processEscapes: true,
+              processEnvironments: true,
+              tags: 'ams',  // Enable equation numbering
+              tagSide: 'right',
+              tagIndent: '.8em',
+            },
+            options: {
+              ignoreHtmlClass: 'tex2jax_ignore',
+              processHtmlClass: 'tex2jax_process'
+            }
+        };
+    </script>
+    <script type="text/javascript" id="MathJax-script" defer src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-svg.js">
+    </script>
+    
+  <style type="text/css">body {
+  font-family: "Times New Roman", serif;
   font-size: 10pt;
   line-height: 1.2em;
   max-width: 800px;
@@ -84,10 +83,10 @@ li {
   margin-bottom: 10px;
 }
 </style>
-    </head>
-    <body>
-        <div id="content" class="tex2jax_process">
-            <h1>Query-As-Network Attention: Generalizing Attention Through Query-Parameterized Nonlinear Scoring</h1>
+</head>
+<body>
+    <div id="content" class="tex2jax_process">
+        <h1>Query-As-Network Attention: Generalizing Attention Through Query-Parameterized Nonlinear Scoring</h1>
 <p><strong>Author:</strong> Richard Vermillion<br />
 <strong>Date:</strong> 2025-10-22  </p>
 <hr />
@@ -347,8 +346,8 @@ dot-product similarity is the optimal foundation for all attention computations.
 <li>Press et al., <em>Train Short, Test Long: Attention with Linear Biases</em>, arXiv:2108.12409.  </li>
 <li>Bahdanau et al., <em>Neural Machine Translation by Jointly Learning to Align and Translate</em>, ICLR 2015.  </li>
 <li>Jaegle et al., <em>Perceiver: General Perception with Iterative Attention</em>, ICML 2021.  </li>
-<li>Fedus et al., <em>Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity</em>, JMLR 2022.  </li>
+<li>Fedus et al., <em>SwitchModule Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity</em>, JMLR 2022.  </li>
 </ol>
-        </div>
-    </body>
-    </html>
+    </div>
+</body>
+</html>

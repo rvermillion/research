@@ -1,34 +1,33 @@
 
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>grounded</title>
-      
-      <script>
-      window.MathJax = {
-        tex: {
-          inlineMath: [['\\(', '\\)'], ['$', '$']],
-          displayMath: [['\\[', '\\]'], ['$$', '$$']],
-          processEscapes: true,
-          processEnvironments: true,
-          tags: 'ams',  // Enable equation numbering
-          tagSide: 'right',
-          tagIndent: '.8em',
-        },
-        options: {
-          ignoreHtmlClass: 'tex2jax_ignore',
-          processHtmlClass: 'tex2jax_process'
-        }
-      };
-      </script>
-      <script type="text/javascript" id="MathJax-script" defer
-        src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-svg.js">
-      </script>
-      
-      <style type="text/css">body {
-  font-family: "Times New Roman";
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>grounded-attention</title>
+  
+    <script>
+        window.MathJax = {
+            tex: {
+              inlineMath: [['\\(', '\\)'], ['$', '$']],
+              displayMath: [['\\[', '\\]'], ['$$', '$$']],
+              processEscapes: true,
+              processEnvironments: true,
+              tags: 'ams',  // Enable equation numbering
+              tagSide: 'right',
+              tagIndent: '.8em',
+            },
+            options: {
+              ignoreHtmlClass: 'tex2jax_ignore',
+              processHtmlClass: 'tex2jax_process'
+            }
+        };
+    </script>
+    <script type="text/javascript" id="MathJax-script" defer src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-svg.js">
+    </script>
+    
+  <style type="text/css">body {
+  font-family: "Times New Roman", serif;
   font-size: 10pt;
   line-height: 1.2em;
   max-width: 800px;
@@ -84,10 +83,10 @@ li {
   margin-bottom: 10px;
 }
 </style>
-    </head>
-    <body>
-        <div id="content" class="tex2jax_process">
-            <h1>Grounded Attention</h1>
+</head>
+<body>
+    <div id="content" class="tex2jax_process">
+        <h1>Grounded Attention</h1>
 <p class="author"><strong>Richard Vermillion</strong><br /></p>
 <h2>Motivation</h2>
 <p>Standard softmax attention is shift-invariant: it operates on relative differences between
@@ -118,7 +117,6 @@ $v_{\text{ground}} = 0$ and $b_h$ to a large negative value (e.g., −10). At in
 and $v_{\text{ground}}$ contributes nothing, so the attention output is identical to standard
 softmax. During fine-tuning, gradient descent discovers which heads benefit from the ground
 mechanism and adjusts both $v_{\text{ground}}$ and $b_h$ accordingly.</p>
-        </div>
-    </body>
-    </html>
-    
+    </div>
+</body>
+</html>

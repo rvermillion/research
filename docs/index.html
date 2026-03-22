@@ -27,7 +27,7 @@
     </script>
     
   <style type="text/css">body {
-  font-family: "Times New Roman";
+  font-family: "Times New Roman", serif;
   font-size: 10pt;
   line-height: 1.2em;
   max-width: 800px;
@@ -106,26 +106,30 @@ Research Engineer · ML Systems Builder
 <p><em>Status: In active development.</em></p>
 <hr />
 <h2>Research Directions</h2>
-<h3>1. Efficient Context &amp; Learned Forgetting</h3>
-<p>Standard Transformers pay a linear memory tax as context grows. These proposals make forgetting a first-class, learned capability — compressing context without discarding signal.</p>
-<p><strong>One-Pass Forgetting</strong> — A self-distillation framework where a lightweight "forget network" learns to predict token utility within a single forward pass, enabling dynamic KV-cache eviction. The goal: fixed-memory context processing at marginal quality cost.
-| <a href="https://github.com/rvermillion/research/tree/main/one_pass_forgetting">Source</a> 
-| <a href="https://rvermillion.github.io/research/one_pass_forgetting.html">Write Up</a></p>
-<p><strong>Attention Antidilution</strong> — Long-context retrieval degrades because irrelevant keys accumulate probability mass under softmax. A geometric correction — centering scores and scaling by √n — preserves the signal-to-noise ratio of relevant keys as context length grows.</p>
-<h3>2. Non-Bilinear &amp; Rotational Architectures</h3>
+<h3>1. Next Generation Attention</h3>
 <p>The bilinear dot-product is elegant but geometrically impoverished. These proposals explore richer similarity kernels and output transformations.</p>
+<p><strong>Principled Attention</strong> — Proposes a principled generalization of standard Scaled Dot Product Attention that addresses many of its weaknesses by adding gated logits, a learned ground state and sequence length scaling. | Source in progress.
+| <a href="https://rvermillion.github.io/research/principled-attention.html">Write Up</a></p>
+<p><strong>Coordinate Attention</strong> — Proposes replacing RoPE with Principled Attention using an attention gate provided by out-of-band "coordinate" vector that encodes the relative position of each token in addition to other "coordinates" such as wall-clock time and token provenance (i.e. self/other, system prompt, speaker, source sensor, etc.). Work in progress.
+| <a href="https://rvermillion.github.io/research/coordinate-attention.html">Write Up</a></p>
 <p><strong>QANA (Query-As-Network Attention)</strong> — Reinterprets the query vector as the weights of a micro-neural network that computes nonlinear compatibility scores with keys. This replaces the fixed bilinear form with a learned, input-dependent similarity kernel — allowing attention to express relationships that dot-products cannot.
 | <a href="https://github.com/rvermillion/research/tree/main/qana">Source</a> 
 | <a href="https://rvermillion.github.io/research/qana.html">Write Up</a></p>
 <p><strong>Rotational Attention Layers</strong> — Uses Geometric Algebra rotors to reinterpret attention output as a rotation in representation space rather than an additive residual shift. The sandwich product RxR̃ performs high-dimensional reorientation, preserving norm while enabling richer representational transformations.
-| <a href="https://github.com/rvermillion/research/tree/main/rotation">Source</a> 
+| <a href="https://github.com/rvermillion/research/tree/main/rotational-transformer">Source</a> 
 | <a href="https://rvermillion.github.io/research/rotational-transformer.html">Write Up</a></p>
+<h3>2. Efficient Context &amp; Learned Forgetting</h3>
+<p>Standard Transformers pay a linear memory tax as context grows. These proposals make forgetting a first-class, learned capability and segment the context — compressing context without discarding signal.</p>
+<p><strong>One-Pass Forgetting</strong> — A self-distillation framework where a lightweight "forget network" learns to predict token utility within a single forward pass, enabling dynamic KV-cache eviction. The goal: fixed-memory context processing at marginal quality cost.
+| <a href="https://github.com/rvermillion/research/tree/main/one-pass-forgetting">Source</a> 
+| <a href="https://rvermillion.github.io/research/one-pass-forgetting.html">Write Up</a></p>
+<p><strong>Segmented Key/Value Cache</strong> — A memory-efficient KV cache that segments memory into variable-size chunks, with a first attention pass running against a "segment key" to determine whether the segment should be attended to or skipped.  We design a key/value cache with a configurable "Segment Breaker" policy and "Key Pooler" strategy and show results for a simple policy that segments the cache into fixed-length chunks (64 tokens) and uses a simple max/min key pooling strategy, demonstrating substantial attention savings with minimal loss in model coherence, even bolted on to pre-trained models. Code is a work in progress, write up forthcoming.</p>
 <h3>3. Adaptive Operators &amp; Credit Assignment</h3>
 <p>Models need better mechanisms for learning over long horizons and adapting their own internal operators online.</p>
 <p><strong>RRET (Read-Refreshed Eligibility Traces)</strong> — A hybrid BPTT/eligibility-trace approach where credit traces are updated only when memories are retrieved, aligning temporal credit assignment with semantic relevance rather than recency.
 | <a href="https://github.com/rvermillion/research/tree/main/rret">Source</a> 
 | <a href="https://rvermillion.github.io/research/rret.html">Write Up</a></p>
-<p><strong>Purpose-Driven Low-Rank Operators (PLoRO)</strong> — A framework for learning online, adaptive low-rank subspaces structured as linear autoencoders, explicitly trained to support downstream objectives like gradient preconditioning. Early experiments show faster convergence and improved training stability compared to standard approaches.
+<p><strong>Purpose-Driven Low-Rank Operators (PLoRO)</strong> — A framework for learning online, adaptive low-rank subspaces structured as linear autoencoders, explicitly trained to support downstream objectives like gradient preconditioning.
 | <a href="https://github.com/rvermillion/research/tree/main/ploro">Source</a> 
 | <a href="https://rvermillion.github.io/research/ploro.html">Write Up</a></p>
 <p><strong>Head Preconditioning</strong> — A two-phase LM head update scheme inspired by recent work on gradient bottlenecks, implemented as an instrumentation plugin (<code>HeadPreconditionInstrument</code> in <code>tensile.extra</code>). The head is preconditioned in a fast initial phase before full-model training begins, reducing early gradient pathology.</p>
