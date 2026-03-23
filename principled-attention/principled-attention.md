@@ -110,7 +110,8 @@ w_{i0} = \frac{\sum_{j=1}^{K}{\max(0, e^{\gamma_i} - e^{a_{ij}})}}{z_i}
 $$
 This ensures that the ground state only claims mass from keys to the extent that they are insufficiently relevant. In this way, the mechanism gives absolute meaning to scores relative to $\gamma_i$: being the best available key is no longer sufficient by itself; a key must also clear a learned baseline to retain its full share.
 
-Critically, if all keys exceed the relevance threshold, the ground state receives no mass.
+Unlike designs that add a fixed ground mass to the denominator, the normalizer $z_i$
+uses $\max(\gamma_i, a_{ij})$, which means keys above the relevance threshold contribute exactly their own mass — undistorted. Only keys below threshold surrender mass to the ground state, and if all keys exceed the threshold, the ground state receives none.
 
 The ground value $v_0$ is a learned vector representing the "default output" — what the attention head produces when nothing in the context is sufficiently worth attending to. This replaces emergent sink behavior with an explicit, learnable mechanism.
 
