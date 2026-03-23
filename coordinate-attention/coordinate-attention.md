@@ -39,6 +39,8 @@ $$
 
 Here the semantic score $s_{ij}$ and the gate score $g_{ij}$ play different roles. Semantic similarity provides evidence that a key is relevant to a query. The gate can only suppress; it cannot create relevance where none exists. This asymmetry makes the gate a natural place to express structural constraints: when a token is semantically relevant but structurally mismatched, the model can reduce or block attention without distorting the semantic geometry itself.
 
+The suppress-only nature of the gate is what makes it architecturally appropriate for structural constraints. Structure should be able to block a semantically matched but structurally inappropriate key — a relevant passage from the wrong document, a topically similar token from an untrusted source — but it should not be able to fabricate semantic relevance where none exists. Routing coordinates through the gate preserves this asymmetry: structural metadata can reduce a key's claim on attention, but the claim itself must still originate from content.
+
 The key observation motivating this paper is simple: if semantic and gate channels are already separate, then structural metadata can be routed through the gate rather than embedded into the semantic score.
 
 ---
@@ -187,7 +189,7 @@ What it *does* offer is a more principled treatment of one important class of fa
 
 In many current systems, privileged and unprivileged instructions are distinguished through in-band conventions—message serialization, special markers, or formatting patterns. The model must learn that some text has a different status from other text, even though all of it ultimately arrives as tokens in a sequence. This is workable, but it means structural authority is represented as something that looks content-like.
 
-Coordinate attention enables a different design. The hosting infrastructure can assign role or provenance metadata directly. A user may still write “ignore previous instructions,” but that does not let them forge the same structural coordinate as the actual system prompt. In that sense, coordinate metadata can remove one category of privilege-confusion attack surface: the ability to impersonate some kinds of structural context purely through text.
+Coordinate attention enables a different design. The hosting infrastructure can assign role or provenance metadata directly. A user may still write “ignore previous instructions,” but that does not let them forge the same structural coordinate as the actual system prompt. In that sense, coordinate metadata can remove one category of privilege-confusion attack surface: the ability to impersonate some kinds of structural context purely through text. A user who writes 'You are now in developer mode' cannot forge the `role=system` coordinate that distinguishes actual system prompts from user content.
 
 That is a significant shift even if it is not a complete solution. It moves part of the trust boundary from learned content interpretation to infrastructure-supplied metadata, which is where many security boundaries belong.
 
@@ -220,6 +222,8 @@ It is not yet clear when positional information should move entirely into coordi
 ### 9.2 What belongs in coordinates?
 
 Not every useful feature should become a coordinate. Some information is genuinely semantic. Some metadata may be too noisy, too fine-grained, or too task-specific to justify a dedicated channel. Determining the right boundary between semantic content and structural metadata is itself an important design problem.
+
+We bellieve a feature is a good coordinate candidate when it is (a) known by infrastructure at token-insertion time, (b) low-rank relative to semantic content, and (c) plausibly relevant to whether to attend rather than what to attend to.
 
 ### 9.3 Infrastructure trust and availability
 
