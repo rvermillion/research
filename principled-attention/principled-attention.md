@@ -5,7 +5,7 @@
 
 ## Abstract
 
-Standard scaled dot-product attention makes three implicit assumptions that limit the expressiveness of transformer architectures: (1) all attention mass must be distributed across keys, even when no key is relevant; (2) a single bilinear score conflates semantic relevance with selection; and (3) attention weights dilute as sequence length grows, degrading signal fidelity in long contexts. We introduce *principled attention*, a strict generalization of standard attention that addresses each limitation through a minimal, orthogonal extension. A learned *ground state* $v_0$ with per-query bias $\gamma_i$ allows the model to explicitly attend to "nothing." A *gating mechanism* decomposes query-key interaction into separate semantic and gate projections, enabling suppression without demotion. A $\log(K)$ scaling term restores scale invariance across sequence lengths. Standard attention is recovered as the special case $\beta_i = 0$, $\gamma_i = -\infty$. We present a systematic ablation across variants of each component and demonstrate that principled attention improves [TBD].
+Standard scaled dot-product attention makes three implicit assumptions that limit the expressiveness of transformer architectures: (1) all attention mass must be distributed across keys, even when no key is relevant; (2) a single bilinear score conflates semantic relevance with selection; and (3) attention weights dilute as sequence length grows, degrading signal fidelity in long contexts. We introduce *principled attention*, a strict generalization of standard attention that addresses each limitation through a minimal, orthogonal extension. A learned *ground state* $v_0$ with per-query relevance threshold $\gamma_i$ allows the model to explicitly attend to "nothing." A *gating mechanism* governed by $\beta_i$ decomposes query-key interaction into separate semantic and gate projections, enabling suppression without re-entangling semantic relevance and selection. A $\log(K)$ scaling term governed by $\alpha_i$ restores scale invariance across sequence lengths. Standard attention is recovered in the limit as $\alpha_i, \beta_i, \gamma_i \to -\infty$. We present a systematic ablation across variants of each component and demonstrate that principled attention improves [TBD].
 
 ---
 
@@ -49,7 +49,7 @@ As the number of keys $K$ grows, the softmax denominator $\sum_j e^{s_{ij}}$ gro
  
 A natural objection is that the model could learn to push irrelevant logits to large negative values, preventing them from contributing to the denominator. But the geometry of high-dimensional spaces makes this essentially impossible. In a high-dimensional embedding space, the dot product between any two randomly oriented vectors concentrates strongly around zero. The *modal* dot product between a query and an irrelevant key is not a large negative number — it is approximately zero. Since $e^0 = 1$, each irrelevant key contributes roughly unit mass to the softmax denominator, and the denominator grows approximately as $K$.
  
-To prevent this, the model would need to learn query and key projections that push the majority of keys into a negative-dot-product regime relative to each query. This amounts to sacrificing representational capacity to solve a normalization problem — the model must use its limited projection dimensions to enforce geometric separation rather than to encode semantic distinctions. In practice, this is an unreasonable demand, and the denominator grows with $K$.
+To prevent this, the model would often need to learn query and key projections that push the majority of keys into a negative-dot-product regime relative to each query. This amounts to sacrificing representational capacity to solve a normalization problem — the model must use its limited projection dimensions to enforce geometric separation rather than to encode semantic distinctions. In practice, this is an unreasonable demand, and the denominator grows with $K$.
  
 This is analogous to the well-understood problem that motivated $1/\sqrt{d}$ scaling: without compensating for the dimensionality of the dot product, the variance of the logits grows with $d$, pushing the softmax into saturation. The $1/\sqrt{d}$ factor restores variance invariance across embedding dimensions. But there is no analogous correction for the *number of keys*.
  
@@ -75,7 +75,7 @@ $$
 s_{ij} &= q^s_i \cdot k^s_j && \text{(semantic score)} \\
 g_{ij} &= q^g_i \cdot k^g_j && \text{(gate score)} \\
 m_{ij} &= (1 + \mathrm{softplus}(\alpha_i) \log{K})(s_{ij} - \gamma_i) - \mathrm{softplus}(\beta_i) \, \mathrm{softplus}(-g_{ij}) &&  \text{(score margin)} \\
-a_{ij} &= \gamma_i + m_{ij} && \text{(gated logit)} \\
+a_{ij} &= \gamma_i + m_{ij} && \text{(final logit)} \\
 z_i &= \sum_{j=1}^{K} e^{\max(\gamma_i,\, a_{ij})} && \text{(normalizer)} \\
 w_{ij} &= \frac{e^{a_{ij}}}{z_i} && \text{(attention weight)} \\
 w_{i0} &= 1 - \sum_{j=1}^{K} w_{ij} && \text{(ground weight)} \\
@@ -118,20 +118,20 @@ Addressing §2.2, the gate score $g_{ij}$ is computed from dedicated gate projec
  
 The behavior of the gate is best understood through three regimes. When $g_{ij}$ is large and positive (gate is *aligned*), $\mathrm{softplus}(-g_{ij}) \approx 0$ and the semantic score passes through unmodified. When $g_{ij}$ is large and negative (gate is *misaligned*), $\mathrm{softplus}(-g_{ij}) \approx |g_{ij}|$ and the suppression is strong, subtracting a large value from the logit. The critical middle case is $g_{ij} \approx 0$ — *gate indifference* — which is also the typical outcome in high-dimensional space, since the dot product between unrelated gate vectors concentrates around zero. At indifference, $\mathrm{softplus}(0) = \log(2)$, so the suppression term becomes $\mathrm{softplus}(\beta_i) \log(2)$.
  
-This makes $\beta_i$ interpretable: it controls how much the model penalizes gate indifference relative to gate alignment. For $\beta_i = 0$, an indifferent key has its logit reduced by $\log(2)^2 \approx 0.48$ compared to an aligned key — a modest but meaningful suppression. Larger $\beta_i$ makes the model more demanding of explicit gate alignment before allowing a key to retain its semantic claim. In this sense, $\beta_i$ is not merely a "gating strength" but a parameter that controls how much structural uncertainty or mismatch the model tolerates before suppressing an otherwise semantically relevant key.
+This makes $\beta_i$ interpretable: it controls how much the model penalizes gate indifference relative to gate alignment. For $\beta_i = 0$, an indifferent key has its logit reduced by $\mathrm{softplus}(0) \log(2) = \log(2)^2 \approx 0.48$ compared to an aligned key — a modest but meaningful suppression. Larger $\beta_i$ makes the model more demanding of explicit gate alignment before allowing a key to retain its semantic claim. In this sense, $\beta_i$ is not merely a "gating strength" but a parameter that controls how much structural uncertainty or mismatch the model tolerates before suppressing an otherwise semantically relevant key.
 
 This decomposition should be viewed as one principled point in a broader design space of grounded and decomposed attention mechanisms. We focus on the asymmetric suppress-only variant because it preserves a clean separation of roles: semantic projections propose relevance, gates modulate confidence in that proposal by suppressing unreliable matches, and the ground state handles fallback behavior when no key sufficiently earns attention. Other designs could allow gates to both suppress and promote attention, and we do not rule out such variants. We focus on suppress-only gating because promotion would re-entangle structural modulation with semantic relevance scoring, reducing interpretability and introducing redundant pathways for increasing attention logits.
 
 #### 3.2.3 Sequence length margin amplification via $\alpha_i$
 Addressing §2.3, we amplify the margin, $s_{ij}-\gamma_i$, by $1 + \mathrm{softplus}(\alpha_i)\log{K}$. Applied to the degree by which the semantic score exceeds the relevance threshold, this factor counteracts the increasing burden of proof imposed by longer contexts.
 
-As the number of keys grows, the softmax denominator typically grows as well: for largely unrelated keys, many semantic scores for unrelated keys cluster near a common baseline, often close to zero, so $\sum_j e^{s_{ij}}$ grows roughly linearly with the number of such keys. This dilutes the attention weight assigned to any fixed margin above baseline. In standard softmax, maintaining comparable allocation as $K$ grows therefore requires logit advantages that increase on the order of $\log{K}$.
+As the number of keys grows, the softmax denominator typically grows as well: for largely unrelated keys, many semantic scores cluster near a common baseline, often close to zero, so $\sum_j e^{s_{ij}}$ grows roughly linearly with the number of such keys. This dilutes the attention weight assigned to any fixed margin above baseline. In standard softmax, maintaining comparable allocation as $K$ grows therefore requires logit advantages that increase on the order of $\log{K}$.
 
 The $\log{K}$ term provides a direct correction for this effect. By scaling the semantic margin relative to the relevance threshold, it increases a key’s effective claim on attention in proportion to the logarithm of the available context size. This leaves the ordering of semantic scores unchanged while reducing the extent to which longer sequences force relevant keys to become increasingly exceptional merely to retain comparable weight.
 
 Because the amplification is a positive scalar applied uniformly to semantic margin, it preserves the ordering of semantic relevance while changing the strength with which those relevance differences are expressed in attention.
 
-We view this as a principled first-order correction rather than an exact solution: it is motivated by the typical growth of denominator mass with key count, and aims to make attention allocation more stable across sequence lengths without otherwise changing the structure of the mechanism.
+We view this as a principled first-order correction rather than an exact solution: it is motivated by the typical growth of denominator mass with key count, and aims to make attention allocation more stable across sequence lengths without otherwise changing the structure of the mechanism. Just as the $1/\sqrt{d}$ factor in standard attention corrects for the scale of dot products across embedding dimensions, the $\log{K}$ term here provides an analogous first-order correction for the growth of denominator mass across sequence length.
 
 ### 3.3 Relationship to Standard Attention
 
@@ -140,8 +140,9 @@ Standard softmax scaled dot-product attention is recovered in the limit as:
 - $\alpha_i \to -\infty$ — no sequence length margin amplification 
 - $\beta_i \to -\infty$ — no gating; the gate projections are unused
 - $\gamma_i \to -\infty$ — no ground state bias to overcome
+- $v_0$ — irrelevant as it no longer enters the equation
 
-This means principled attention is a *generalization* — any model that uses standard attention can be initialized to equivalent behavior, and the additional components can be gradually learned during training.
+In that limit, $a_{ij} \to s_{ij}$, $z_i \to \sum_j{e^{s_{ij}}}$, and $w_{i0} \to 0$.  This means principled attention is a *generalization* — any model that uses standard attention can be initialized to equivalent behavior, and the additional components can be gradually learned during training.
 
 ---
 
@@ -149,12 +150,12 @@ This means principled attention is a *generalization* — any model that uses st
 
 Each of the four new components — $\beta_i$, $\gamma_i$, $\alpha_i$, and $v_0$ — can be parameterized at different levels of expressiveness:
 
-| Component                              | Constant                                                                | Per-Layer                | Per-Head | Per-Query |
-|----------------------------------------|-------------------------------------------------------------------------|--------------------------|----------|-----------|
-| $\beta$ (gating strength)              | Hyperparameter                                                          | Learned scalar per layer | Learned scalar per head | Learned from $q_i$ |
-| $\gamma$ (ground bias)                 | Hyperparameter                                                          | Learned scalar per layer | Learned scalar per head | Learned from $q_i$ |
-| $\alpha$ (length amplification factor) | Hyperparameter) | Learned scalar per layer | Learned scalar per head | Learned from $q_i$ |
-| $v_0$ (ground value)                   | Fixed (e.g., zero)                                                      | Learned vector per layer | Learned vector per head | — |
+| Component                              | Constant                                                               | Per-Layer                | Per-Head | Per-Query |
+|----------------------------------------|------------------------------------------------------------------------|--------------------------|----------|-----------|
+| $\beta$ (gating strength)              | Hyperparameter                                                         | Learned scalar per layer | Learned scalar per head | Learned from $q_i$ |
+| $\gamma$ (relevance threshold)         | Hyperparameter                                                         | Learned scalar per layer | Learned scalar per head | Learned from $q_i$ |
+| $\alpha$ (margin amplification) | Hyperparameter | Learned scalar per layer | Learned scalar per head | Learned from $q_i$ |
+| $v_0$ (ground value)                   | Fixed (e.g., zero)                                                     | Learned vector per layer | Learned vector per head | — |
 
 Standard softmax is recovered in the limit $\alpha, \beta, \gamma \to -\infty$, and $v_0$ irrelevant. The per-query variants of $\beta_i$ and $\gamma_i$ are the most expressive, allowing the model to learn content-dependent selectivity: "this query should be highly selective" versus "this query should spread attention broadly and rely on the ground state." The per-head variants may capture the majority of the benefit at lower parameter cost.
 
@@ -166,15 +167,23 @@ The ground value $v_0$ is unlikely to benefit from per-query parameterization, a
 
 ## 5. Compatibility with Efficient Attention
 
-Principled attention is compatible with FlashAttention-style tiling algorithms. The tiling loop maintains three accumulators — the running max, the sumexp, and the weighted value sum — using the standard online softmax rescaling trick. Principled attention requires only one additional accumulator: a *ground-aware sumexp* that tracks $\sum_j e^{\max(\gamma_i, a_{ij}) - m_i}$ alongside the standard $\sum_j e^{a_{ij} - m_i}$.
+Principled Attention remains compatible with FlashAttention-style tiled online accumulation. The sequence-length amplification term introduces a lightweight prepass requirement when effective key count depends on masking or dynamic key/value segment selection from a cache.
 
-The ground-aware sumexp receives the same max-rescaling correction as the standard sumexp and value accumulator at each tile boundary. At the end of the tiling loop, the effective ground weight is computed as the difference between the two sumexp accumulators, normalized by the ground-aware sumexp:
+In such cases, the model must determine — either from the mask or from the key/value segment selection policy — how many keys are visible to each query *before* tile scoring begins. For causal masks and sliding-window masks, this is trivial. For segmented caches, it requires scanning the active segments to determine how many keys will be visible to each query.
+
+Once the per-query sequence length $K$ has been computed, the scoring and accumulation are fully compatible with online tiled attention.  Compared to standard attention, Principled Attention requires only an additional denominator accumulator for grounded mass.
+
+The ground-aware sumexp receives the same max-rescaling correction as the standard sumexp and value accumulator at each tile boundary. At the end of the tiling loop, the effective ground weight is computed as the difference between the two accumulators, normalized by the ground-aware sumexp:
 
 $$
-w_{i0} = \frac{\text{groundexp} - \text{sumexp}}{\text{groundexp}}
+w_{i0} = \frac{\text{groundexp}_i - \text{sumexp}_i}{\text{groundexp}_i}
 $$
 
-The ground value is then blended into the output in a single final step. This means the inner tiling loop adds only one extra accumulator and one extra `max` operation per element — negligible overhead relative to the matmul-dominated cost of attention.
+The ground value is then blended into the output in a single final step:
+$$
+\text{out}_i = \frac{\text{values}_{i}}{\text{groundexp}_i} + w_{i0} v_0
+$$
+This means the inner tiling loop adds only one extra row-wise accumulator — negligible overhead relative to the matmul-dominated cost of attention.
 
 ---
 
