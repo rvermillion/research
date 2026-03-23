@@ -74,8 +74,9 @@ $$
 \begin{aligned}
 s_{ij} &= q^s_i \cdot k^s_j && \text{(semantic score)} \\
 g_{ij} &= q^g_i \cdot k^g_j && \text{(gate score)} \\
-m_{ij} &= (1 + \mathrm{softplus}(\alpha_i) \log{K})(s_{ij} - \gamma_i) - \mathrm{softplus}(\beta_i) \, \mathrm{softplus}(-g_{ij}) &&  \text{(score margin)} \\
-a_{ij} &= \gamma_i + m_{ij} && \text{(final logit)} \\
+b_{ij} &= \mathrm{softplus}(\beta_i) \, \mathrm{softplus}(-g_{ij}) &&  \text{(gate suppression)} \\
+m_{ij} &= (1 + \mathrm{softplus}(\alpha_i) \log{K})(s_{ij} - \gamma_i) &&  \text{(amplified margin)} \\
+a_{ij} &= \gamma_i + m_{ij} - b_{ij} && \text{(final logit)} \\
 z_i &= \sum_{j=1}^{K} e^{\max(\gamma_i,\, a_{ij})} && \text{(normalizer)} \\
 w_{ij} &= \frac{e^{a_{ij}}}{z_i} && \text{(attention weight)} \\
 w_{i0} &= 1 - \sum_{j=1}^{K} w_{ij} && \text{(ground weight)} \\
@@ -85,15 +86,16 @@ $$
 
 where $\beta_i$ is a learned gating strength, $\gamma_i$ is a learned relevance threshold, $\alpha_i$ is a margin amplification factor, and $v_0$ is a learned ground value.
 
-The attention margin, $m_{ij}$, decomposes into two additive terms in log-space:
+The final logit, $a_{ij}$, decomposes into three additive terms in log-space:
 $$
-m_{ij}
-=
-\underbrace{(1+\mathrm{softplus}(\alpha_i) \log K)(s_{ij}-\gamma_i)}_{\text{margin amplification}}
+a_{ij}
+= \gamma_i +
+\underbrace{(1+\mathrm{softplus}(\alpha_i) \log K)(s_{ij}-\gamma_i)}_{\text{amplified margin}}
 \;-\;
 \underbrace{\mathrm{softplus}(\beta_i)\,\mathrm{softplus}(-g_{ij})}_{\text{gate suppression}}
 $$
-This decomposition gives the mechanism a clean interpretation. The first term amplifies semantic evidence relative to the learned ground reference, counteracting the growing burden of proof in longer contexts. The second term subtracts a nonnegative suppressive penalty based on the gate signal. Because both terms act additively in log-space, they combine in a common currency: semantic evidence raises a key’s claim on attention, while gating can only reduce that claim, not create it.
+
+This decomposition gives the mechanism a clean interpretation. The baseline term $\gamma_i$ sets the learned relevance threshold. The amplified-margin term increases a key’s claim on attention according to how far its semantic score exceeds that threshold, while counteracting the growing burden of proof in longer contexts. The gate-suppression term subtracts a nonnegative penalty based on the gate signal. Because all three terms combine additively in log-space, they operate in a common currency: semantic evidence can increase a key’s claim on attention, while gating can only reduce that claim, not create it.
 
 ### 3.2 How Each Component Addresses a Problem
 

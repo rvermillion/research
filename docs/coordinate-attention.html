@@ -103,7 +103,9 @@ li {
 \begin{aligned}
 s_{ij} &amp;= q^s_i \cdot k^s_j &amp;&amp; \text{(semantic score)} \\
 g_{ij} &amp;= q^g_i \cdot k^g_j &amp;&amp; \text{(gate score)} \\
-a_{ij} &amp;= \lambda_i \, s_{ij} - \beta_i \, \mathrm{softplus}(-g_{ij}) &amp;&amp; \text{(gated logit)}
+b_{ij} &amp;= \mathrm{softplus}(\beta_i) \, \mathrm{softplus}(-g_{ij}) &amp;&amp;  \text{(gate suppression)} \\
+m_{ij} &amp;= (1 + \mathrm{softplus}(\alpha_i) \log{K})(s_{ij} - \gamma_i) &amp;&amp;  \text{(amplified margin)} \\
+a_{ij} &amp;= \gamma_i + m_{ij} - b_{ij} &amp;&amp; \text{(final logit)} \\
 \end{aligned}
 $$</p>
 <p>The gate can only suppress, never promote — $\mathrm{softplus}(-g_{ij})$ is always non-negative, so the gate subtracts from the semantic score. When the gate vectors are aligned ($g_{ij} \gg 0$), the suppression vanishes and the semantic score passes through. When they are misaligned ($g_{ij} \ll 0$), the logit is strongly suppressed. The parameter $\beta_i$ controls how much gate indifference (the modal case in high dimensions) penalizes the logit.</p>

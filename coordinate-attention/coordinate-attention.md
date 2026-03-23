@@ -29,7 +29,9 @@ $$
 \begin{aligned}
 s_{ij} &= q^s_i \cdot k^s_j && \text{(semantic score)} \\
 g_{ij} &= q^g_i \cdot k^g_j && \text{(gate score)} \\
-a_{ij} &= \lambda_i \, s_{ij} - \beta_i \, \mathrm{softplus}(-g_{ij}) && \text{(gated logit)}
+b_{ij} &= \mathrm{softplus}(\beta_i) \, \mathrm{softplus}(-g_{ij}) &&  \text{(gate suppression)} \\
+m_{ij} &= (1 + \mathrm{softplus}(\alpha_i) \log{K})(s_{ij} - \gamma_i) &&  \text{(amplified margin)} \\
+a_{ij} &= \gamma_i + m_{ij} - b_{ij} && \text{(final logit)} \\
 \end{aligned}
 $$
 
