@@ -43,19 +43,19 @@ Each cell has a dimensionality $d_i$ that may differ from other cells. The state
 
 Cells are connected by three types of edges:
 
-- **Prediction edges** $p_{i,j}$: cell $i$ predicts the state of cell $j$. Predictions flow "downward" (from more abstract to more concrete).
-- **Error edges** $e_{i,j}$: cell $i$ reports the prediction error to cell $j$. Errors flow "upward" (from more concrete to more abstract). Every prediction edge $p_{j,i}$ has a corresponding error edge $e_{i,j}$ flowing in the opposite direction.
-- **State (self) edges** $s_{i,i}$: the recurrent connection from a cell to itself. This is simply the state vector $s^t_i$ persisting (with update) from tick to tick.
+- **Prediction edges** $p_{ij}$: cell $i$ predicts the state of cell $j$. Predictions flow "downward" (from more abstract to more concrete).
+- **Error edges** $e_{ij}$: cell $i$ reports the prediction error to cell $j$. Errors flow "upward" (from more concrete to more abstract). Every prediction edge $p_{j,i}$ has a corresponding error edge $e_{ij}$ flowing in the opposite direction.
+- **State (self) edges** $s_{ii}$: the recurrent connection from a cell to itself. This is simply the state vector $s^t_i$ persisting (with update) from tick to tick.
 
 ### 2.3 Edge Values
 
 Each edge carries a vector value at each tick. We use superscripts for time:
 
-- $p^t_{i,j} \in \mathbb{R}^{d_j}$: the prediction that cell $i$ makes about cell $j$'s state, published at tick $t$.
-- $e^t_{i,j} \in \mathbb{R}^{d_i}$: the error that cell $i$ computes and sends to cell $j$, published at tick $t$.
+- $p^t_{ij} \in \mathbb{R}^{d_j}$: the prediction that cell $i$ makes about cell $j$'s state, published at tick $t$.
+- $e^t_{ij} \in \mathbb{R}^{d_i}$: the error that cell $i$ computes and sends to cell $j$, published at tick $t$.
 - $s^t_i \in \mathbb{R}^{d_i}$: cell $i$'s state at tick $t$.
 
-Note the dimensionality convention: predictions $p_{i,j}$ live in the target cell's space ($\mathbb{R}^{d_j}$), while errors $e_{i,j}$ live in the source cell's space ($\mathbb{R}^{d_i}$).
+Note the dimensionality convention: predictions $p_{ij}$ live in the target cell's space ($\mathbb{R}^{d_j}$), while errors $e_{ij}$ live in the source cell's space ($\mathbb{R}^{d_i}$).
 
 ---
 
@@ -66,11 +66,11 @@ Note the dimensionality convention: predictions $p_{i,j}$ live in the target cel
 | $C_i$ | Cell $i$ |
 | $d_i$ | Dimensionality of cell $i$'s state |
 | $s^t_i$ | State of cell $i$ at tick $t$ |
-| $p^t_{i,j}$ | Prediction from cell $i$ about cell $j$, at tick $t$ |
-| $e^t_{i,j}$ | Error from cell $i$ sent to cell $j$, at tick $t$ |
+| $p^t_{ij}$ | Prediction from cell $i$ about cell $j$, at tick $t$ |
+| $e^t_{ij}$ | Error from cell $i$ sent to cell $j$, at tick $t$ |
 | $m^t_i$ | Working memory of cell $i$ at tick $t$ |
-| $p^t_{*,i}$ | All incoming predictions to cell $i$ at tick $t$ |
-| $e^t_{*,i}$ | All incoming errors to cell $i$ at tick $t$ |
+| $p^t_{*i}$ | All incoming predictions to cell $i$ at tick $t$ |
+| $e^t_{*i}$ | All incoming errors to cell $i$ at tick $t$ |
 
 **Time convention**: a cell's state at tick $t+1$ is a function of tick-$t$ quantities. Predictions are computed from the current state at the same tick. Errors compare the *previous tick's* prediction against the *current tick's* state. All cells update in parallel; there are no within-tick dependencies between cells.
 
@@ -82,19 +82,19 @@ The dynamics of the system are governed by four equations, evaluated in parallel
 
 ### 4.1 State Update
 
-$$s^{t+1}_i = s^t_i + g_i(s^t_i,\; p^t_{*,i},\; e^t_{*,i},\; m^t_i)$$
+$$s^{t+1}_i = s^t_i + g_i(s^t_i,\; p^t_{*i},\; e^t_{*i},\; m^t_i)$$
 
 The state update is a **residual**: the cell computes a delta from its current state, incoming predictions, incoming errors, and working memory (see Section 6 for the internal structure of $g_i$). The residual form ensures that the default behavior is persistence — a cell's state is stable unless there is reason to change it.
 
 ### 4.2 Prediction
 
-$$p^t_{i,j} = h_j^{(i)}(s^t_i)$$
+$$p^t_{ij} = h_j^{(i)}(s^t_i)$$
 
 Each cell $i$ has a **separate prediction head** $h_j^{(i)}$ for each cell $j$ that it predicts. The prediction is a function of the current state, published at the same tick. Prediction heads are MLPs (with normalization; details TBD).
 
 ### 4.3 Error
 
-$$e^t_{i,j} = f(p^{t-1}_{j,i},\; s^t_i)$$
+$$e^t_{ij} = f(p^{t-1}_{j,i},\; s^t_i)$$
 
 The error compares what cell $j$ predicted about cell $i$ *last tick* against cell $i$'s *current* state. In the simplest form, $f$ is the difference $p^{t-1}_{j,i} - s^t_i$. More complex error functions (sparse, precision-weighted; see Section 7) are contemplated.
 
@@ -102,7 +102,7 @@ The error computation is **uniform across the stack**. The only asymmetry is in 
 
 ### 4.4 Memory Update
 
-$$m^{t+1}_i = f_{\text{mem}}^{(i)}(m^t_i,\; s^t_i,\; p^t_{*,i},\; e^t_{*,i})$$
+$$m^{t+1}_i = f_{\text{mem}}^{(i)}(m^t_i,\; s^t_i,\; p^t_{*i},\; e^t_{*i})$$
 
 Memory updates in parallel with state, consuming the same tick-$t$ inputs. See Section 6 for the structure of $f_{\text{mem}}$.
 
@@ -186,11 +186,13 @@ The state update function $g_i$ is implemented as an **attention mechanism over 
 
 At each tick:
 
-1. The current inputs — $s^t_i$, $p^t_{*,i}$, $e^t_{*,i}$ — are projected into **keys** and **values** that are appended to the working memory buffer (with eviction of old entries as needed).
+1. The current inputs — $s^t_i$, $p^t_{*i}$, $e^t_{*i}$ — are projected into **keys** and **values** that are appended to the working memory buffer (with eviction of old entries as needed).
 2. The same inputs are projected into **queries** that attend over the full buffer via multi-head attention.
 3. The attention output is passed through a projection and MLP to produce the residual state update.
 
 This means the cell's state transition is **not Markov in the state alone** — it has access to a window of its own recent history. The cell can recognize temporal patterns: repeated errors, converging predictions, oscillating states.
+
+One possible result of this that we hope to explore in testing is that the cell can form an emergent model of its own precision, noise, surprise, and confusion.
 
 ### 6.2 Projection Structure
 
@@ -220,21 +222,21 @@ The eviction policy is an open research question. A learned policy is preferred,
 
 In the base architecture, predictions and errors are point vectors in $\mathbb{R}^{d_i}$. However, the edges may optionally carry **precision metadata**: additional structure encoding confidence, variance, or uncertainty.
 
-A prediction $p^t_{i,j}$ might carry:
+A prediction $p^t_{ij}$ might carry:
 
-- A **point estimate** $\mu^t_{i,j} \in \mathbb{R}^{d_j}$ (the predicted state).
-- A **variance structure** $\sigma^t_{i,j} \in \mathbb{R}^{d_j}$ (a diagonal encoding of precision/confidence).
+- A **point estimate** $\mu^t_{ij} \in \mathbb{R}^{d_j}$ (the predicted state).
+- A **variance structure** $\sigma^t_{ij} \in \mathbb{R}^{d_j}$ (a diagonal encoding of precision/confidence).
 
-An error $e^t_{i,j}$ might carry:
+An error $e^t_{ij}$ might carry:
 
-- The **residual** $\delta^t_{i,j} = p^{t-1}_{j,i} - s^t_i$.
+- The **residual** $\delta^t_{ij} = p^{t-1}_{j,i} - s^t_i$.
 - An estimate of **error reliability**: whether the error reflects a genuinely bad prediction or noisy state (inferred from recent error variance).
 
 ### 7.2 Precision-Weighted Errors
 
 If precision metadata is available, the error computation can be precision-weighted:
 
-$$e^t_{i,j} = f(p^{t-1}_{j,i},\; s^t_i,\; \sigma^{t-1}_{j,i})$$
+$$e^t_{ij} = f(p^{t-1}_{j,i},\; s^t_i,\; \sigma^{t-1}_{j,i})$$
 
 A large residual on a low-confidence prediction is less surprising than a small residual on a high-confidence one. The error signal becomes "how surprised should you actually be" rather than "how far off were you."
 
@@ -273,9 +275,9 @@ The details of the long-term memory system — storage format, indexing, retriev
 
 The loss at each tick is the sum of per-edge error terms:
 
-$$\mathcal{L}^t = \sum_{(i,j) \in \mathcal{E}} \text{loss}(e^t_{i,j})$$
+$$\mathcal{L}^t = \sum_{(ij) \in \mathcal{E}} \text{loss}(e^t_{ij})$$
 
-where $\mathcal{E}$ is the set of all error edges in the graph. The simplest choice for $\text{loss}$ is the squared norm $\|e^t_{i,j}\|^2$, but other choices (L1, Huber, precision-weighted) are possible.
+where $\mathcal{E}$ is the set of all error edges in the graph. The simplest choice for $\text{loss}$ is the squared norm $\|e^t_{ij}\|^2$, but other choices (L1, Huber, precision-weighted) are possible.
 
 This means:
 
@@ -384,13 +386,61 @@ These are speculative extensions, to be explored if and when the failure modes o
 
 ### 11.5 Lagged Predictions
 
-In the base architecture, $p^t_{i,j}$ predicts cell $j$'s state at the next tick. A generalization allows a cell to predict a lower cell's state **$T$ ticks in the future**, where $T$ may vary by level. Higher cells, operating more abstractly, might predict further ahead. This introduces additional timing complexity but could improve credit assignment and enable hierarchical temporal abstraction.
+In the base architecture, $p^t_{ij}$ predicts cell $j$'s state at the next tick. A generalization allows a cell to predict a lower cell's state **$T$ ticks in the future**, where $T$ may vary by level. Higher cells, operating more abstractly, might predict further ahead. This introduces additional timing complexity but could improve credit assignment and enable hierarchical temporal abstraction.
 
 ---
 
-## 12. Readout for Practical Experiments
+## 12. Event-Driven Operation
 
-### 12.1 The Short-Term Expedient
+### 12.1 From Synchronous to Event-Based
+
+The synchronous architecture described so far — every cell computes every tick — is the simplest execution model and the right starting point for implementation. But the message-slot interface already contains the seeds of a more efficient paradigm. We have already noted that slots can hold stale predictions (decaying) or accumulated errors (as EMAs) when cells run at different rates. The conceptual step from "messages might be stale because clocks differ" to "messages are only sent when they carry meaningful information" is small, but the practical implications are large.
+
+In the **event-driven** variant, a cell publishes a message only when it exceeds a **surprise threshold**:
+
+- An error $e^t_{ij}$ is sent only if $\|e^t_{ij}\| > \epsilon_e$. If the prediction was accurate enough, silence is the message.
+- A prediction $p^t_{ij}$ is re-sent only if $\|p^t_{ij} - p^{t-1}_{ij}\| > \epsilon_p$. If the prediction hasn't changed, the last one still holds.
+- A cell may skip its own state update entirely if no incoming events have arrived and its internal dynamics are quiescent.
+
+The thresholds $\epsilon_e$ and $\epsilon_p$ could be fixed hyperparameters, learned per-cell, or dynamically adjusted — another instance of the "provide scaffolding, let the rest emerge" design philosophy.
+
+### 12.2 Computation Proportional to Surprise
+
+In the synchronous model, computational cost is proportional to the number of cells times the number of ticks — constant regardless of whether the input is novel or familiar. In the event-driven model, cost is proportional to **surprise**: the total amount of prediction error flowing through the graph.
+
+A familiar, predictable environment produces few events. Cells that have "figured out" their input go idle. A novel or changing environment generates cascades of events — errors propagating upward trigger state changes, which change predictions, which generate new errors at lower levels. Computational resources concentrate automatically where the world model is failing.
+
+This is remarkably consistent with cortical metabolic data: brain regions processing predictable stimuli show reduced activity, while novel or unexpected stimuli produce widespread activation.
+
+### 12.3 Sparse Cascades and Attention Allocation
+
+Event-driven operation creates a natural **attention allocation** mechanism. Consider an agent in a stable environment: most cells are idle, predictions are holding, errors are below threshold. Then something unexpected happens — an anomalous sensory input produces a large error at an S-cell. This error propagates upward as an event, triggering state updates in interior cells. Those state changes alter predictions, potentially generating new errors at other branches of the graph. The cascade of events *is* the system paying attention to the anomaly.
+
+This connects back to active perception (Section 10): the cascade might trigger motor actions (saccade toward the unexpected stimulus, pause reading to re-examine a passage) that generate further sensory events. The system doesn't need an explicit attention mechanism — attention emerges from the dynamics of surprise propagation.
+
+### 12.4 Integration with Event-Based Sensors
+
+The event-driven architecture is a natural fit for **event-based sensors**, particularly event cameras (dynamic vision sensors) that emit pixel-level events only when luminance changes. Pairing an event-based camera with an event-driven cell stack means the entire pipeline — from photon to world model update — is sparse and change-driven. There are no frames, no fixed-rate processing, just surprise propagating from sensor to model.
+
+This could be a significant efficiency advantage for robotics and embodied agents, where the sensory stream is high-bandwidth but mostly redundant (a static scene produces no events). The architecture processes only what changes, at the rate it changes.
+
+### 12.5 Implications for the Quiet Mechanism
+
+Event-driven operation interacts with the M-cell quiet mechanism (Section 10.4) in an interesting way. In the synchronous model, a quiet M-cell actively produces a "silence" output every tick. In the event-driven model, a quiet M-cell simply produces no events — it is indistinguishable from a cell with nothing to say. Action becomes a true event: the M-cell fires only when it has decided to do something, and the rest of the system can distinguish "deliberately quiet" from "nothing has changed" by whether the parent cell's prediction of the M-cell's state has changed.
+
+### 12.6 Open Questions
+
+- **Threshold selection**: fixed, learned, or adaptive? Per-cell or global?
+- **Guaranteed liveness**: how to prevent the system from going completely silent (all cells idle, no events, no learning)?
+- **Training in event mode**: can the system be trained event-driven from the start, or must it first be trained synchronously and then transitioned?
+- **Event batching**: for hardware efficiency, sparse events may need to be batched into micro-ticks. How does this interact with the timing model?
+- **Hybrid mode**: some cells (e.g., high-level reasoning) might always tick on a clock, while lower cells operate event-driven. The slot interface supports this naturally.
+
+---
+
+## 13. Readout for Practical Experiments
+
+### 13.1 The Short-Term Expedient
 
 For initial experiments (e.g., language modeling benchmarks to verify that the architecture can learn at all), a pragmatic readout can be implemented:
 
@@ -400,7 +450,7 @@ For initial experiments (e.g., language modeling benchmarks to verify that the a
 
 This is **not** the intended long-term architecture. It is a scaffolding for validation: can the cell stack learn useful representations? Do the predictions converge? Does working memory help?
 
-### 12.2 The Long-Term Vision
+### 13.2 The Long-Term Vision
 
 In the full architecture, generation is driven by M-cells (Section 5.3). A language M-cell outputs a token distribution; a proprioceptive S-cell reads back the generated token. The system learns to speak by learning the joint prediction of action and consequence.
 
@@ -424,3 +474,7 @@ The transition from the short-term LM-head readout to the full M-cell generation
 12. **Loss weighting**: uniform across edges, level-dependent, precision-modulated?
 13. **Initialization and warmup**: how does the system bootstrap from random states?
 14. **Lagged predictions**: which cells predict how far ahead?
+15. **Event thresholds**: fixed, learned, or adaptive? Per-cell or global?
+16. **Guaranteed liveness**: preventing system-wide quiescence in event-driven mode.
+17. **Event-driven training**: synchronous-first then transition, or event-driven from the start?
+18. **Event-sensor integration**: interface design for event cameras and other sparse sensors.
