@@ -44,7 +44,7 @@ Each cell has a dimensionality $d_i$ that may differ from other cells. The state
 Cells are connected by three types of edges:
 
 - **Prediction edges** $p_{ij}$: cell $i$ predicts the state of cell $j$. Predictions flow "downward" (from more abstract to more concrete).
-- **Error edges** $e_{ij}$: cell $i$ reports the prediction error to cell $j$. Errors flow "upward" (from more concrete to more abstract). Every prediction edge $p_{j,i}$ has a corresponding error edge $e_{ij}$ flowing in the opposite direction.
+- **Error edges** $e_{ij}$: cell $i$ reports the prediction error to cell $j$. Errors flow "upward" (from more concrete to more abstract). Every prediction edge $p_{ji}$ has a corresponding error edge $e_{ij}$ flowing in the opposite direction.
 - **State (self) edges** $s_{ii}$: the recurrent connection from a cell to itself. This is simply the state vector $s^t_i$ persisting (with update) from tick to tick.
 
 ### 2.3 Edge Values
@@ -94,9 +94,9 @@ Each cell $i$ has a **separate prediction head** $h_j^{(i)}$ for each cell $j$ t
 
 ### 4.3 Error
 
-$$e^t_{ij} = f(p^{t-1}_{j,i},\; s^t_i)$$
+$$e^t_{ij} = f(p^{t-1}_{ji},\; s^t_i)$$
 
-The error compares what cell $j$ predicted about cell $i$ *last tick* against cell $i$'s *current* state. In the simplest form, $f$ is the difference $p^{t-1}_{j,i} - s^t_i$. More complex error functions (sparse, precision-weighted; see Section 7) are contemplated.
+The error compares what cell $j$ predicted about cell $i$ *last tick* against cell $i$'s *current* state. In the simplest form, $f$ is the difference $p^{t-1}_{ji} - s^t_i$. More complex error functions (sparse, precision-weighted; see Section 7) are contemplated.
 
 The error computation is **uniform across the stack**. The only asymmetry is in how $s^t_i$ is determined (exogenous for sensory cells, learned for interior cells), not in how the error is calculated.
 
@@ -130,7 +130,7 @@ In a linear stack, an interior cell has exactly two incoming edges (one predicti
 
 An S-cell is a bottom cell whose state is **clamped to external input**. Its state $s^t_0$ is an embedding of sensory data (a token embedding, patch embedding, audio frame, joint position, etc.). The S-cell performs minimal computation: it compares the incoming prediction against its perceived state and sends the error upward.
 
-$$e^{t}_{0,j} = f(p^{t-1}_{j,0},\; s^t_0)$$
+$$e^{t}_{0j} = f(p^{t-1}_{j0},\; s^t_0)$$
 
 S-cells have no outgoing prediction edges (there is nothing below them to predict) and no meaningful state update function (their state is exogenous).
 
@@ -140,7 +140,7 @@ S-cells have no outgoing prediction edges (there is nothing below them to predic
 
 An M-cell is a bottom cell whose state **drives an action** in the environment. Where an S-cell's state is determined by perception (the world writes to it), an M-cell's state is determined by the prediction from the cell above it (the model writes to the world through it).
 
-$$s^t_{\text{motor}} = \text{constrain}(p^{t}_{j, \text{motor}})$$
+$$s^t_{\text{motor}} = \text{constrain}(p^{t}_{j,\text{motor}})$$
 
 The constraint function may include clipping, rate-limiting, safety bounds, or discretization (e.g., sampling from a token distribution). The M-cell's state *is* the motor command.
 
@@ -172,9 +172,9 @@ For a three-cell linear stack $C_0$ (sensory), $C_1$ (interior), $C_2$ (top):
 
 | Cell | Incoming | Outgoing | State determined by |
 |------|----------|----------|---------------------|
-| $C_0$ (S-cell) | $p_{1,0}$ | $e_{0,1}$ | Exogenous (sensory embedding) |
-| $C_1$ (interior) | $p_{2,1}$, $e_{0,1}$ | $p_{1,0}$, $e_{1,2}$ | Learned: $g_1(s^t_1, p^t_{2,1}, e^t_{0,1}, m^t_1)$ |
-| $C_2$ (top) | $e_{1,2}$ | $p_{2,1}$ | Learned: $g_2(s^t_2, e^t_{1,2}, m^t_2)$ |
+| $C_0$ (S-cell) | $p_{10}$ | $e_{01}$ | Exogenous (sensory embedding) |
+| $C_1$ (interior) | $p_{21}$, $e_{01}$ | $p_{10}$, $e_{12}$ | Learned: $g_1(s^t_1, p^t_{21}, e^t_{01}, m^t_1)$ |
+| $C_2$ (top) | $e_{12}$ | $p_{21}$ | Learned: $g_2(s^t_2, e^t_{12}, m^t_2)$ |
 
 ---
 
@@ -229,14 +229,14 @@ A prediction $p^t_{ij}$ might carry:
 
 An error $e^t_{ij}$ might carry:
 
-- The **residual** $\delta^t_{ij} = p^{t-1}_{j,i} - s^t_i$.
+- The **residual** $\delta^t_{ij} = p^{t-1}_{ji} - s^t_i$.
 - An estimate of **error reliability**: whether the error reflects a genuinely bad prediction or noisy state (inferred from recent error variance).
 
 ### 7.2 Precision-Weighted Errors
 
 If precision metadata is available, the error computation can be precision-weighted:
 
-$$e^t_{ij} = f(p^{t-1}_{j,i},\; s^t_i,\; \sigma^{t-1}_{j,i})$$
+$$e^t_{ij} = f(p^{t-1}_{ji},\; s^t_i,\; \sigma^{t-1}_{ji})$$
 
 A large residual on a low-confidence prediction is less surprising than a small residual on a high-confidence one. The error signal becomes "how surprised should you actually be" rather than "how far off were you."
 
@@ -540,7 +540,7 @@ If the system has both grounded and simulation stacks using the same representat
 For initial experiments (e.g., language modeling benchmarks to verify that the architecture can learn at all), a pragmatic readout can be implemented:
 
 - Use a standard S-cell with token embeddings as input.
-- Attach a conventional **LM head** (a linear projection to vocabulary logits) to the S-cell's incoming prediction $p^t_{1,0}$, or to the interior cell's state $s^t_1$.
+- Attach a conventional **LM head** (a linear projection to vocabulary logits) to the S-cell's incoming prediction $p^t_{10}$, or to the interior cell's state $s^t_1$.
 - Treat the system as a next-token predictor and train with cross-entropy loss on the LM head output, in addition to (or instead of) the per-edge prediction error loss.
 
 This is **not** the intended long-term architecture. It is a scaffolding for validation: can the cell stack learn useful representations? Do the predictions converge? Does working memory help?
