@@ -438,9 +438,104 @@ Event-driven operation interacts with the M-cell quiet mechanism (Section 10.4) 
 
 ---
 
-## 13. Readout for Practical Experiments
+## 13. Goals, Valence, Adaptation, and Simulation
 
-### 13.1 The Short-Term Expedient
+The preceding sections describe a system that predicts well. This section addresses the question of what the system *wants* — where goals come from, how they drive behavior, how the system adapts to changing circumstances, and how it might plan. This is the most speculative part of the architecture, and the most important.
+
+### 13.1 The Goal Problem
+
+A system that minimizes prediction error at every level is, by default, a model of the world — not an agent in it. It will learn to predict what happens, but it has no reason to prefer one outcome over another, and no reason to act. Something must supply a notion of *what states are desirable*, and that notion must cascade downward through predictions and actions to influence behavior.
+
+### 13.2 Valence as Persistent Top-Level Prediction
+
+The proposed mechanism is **valence**: a multi-dimensional signal encoding the desirability of the system's current state. The top cell (or cells) maintain a persistent prediction that the system is in a high-valence state. This is not a prediction *about* the world in the same way lower cells predict sensory states — it is closer to a prior, a commitment, an insistence. The system *expects* to be doing well.
+
+This creates an asymmetry in how prediction error minimization works at different levels of the stack:
+
+- **Lower cells**: predictions chase reality. Error is minimized by updating predictions to match what is actually perceived. The system learns an accurate world model.
+- **Top cells**: reality chases predictions. Error is minimized by taking actions that change the world (or the system's relation to it) to match the predicted high-valence state. The system pursues goals.
+
+The same prediction-error mechanism operates at every level. The difference is whether the cell's path to error reduction runs through updated predictions (modeling) or through M-cells that change the world (acting). This is consistent with the predictive coding and active inference literature, where action and perception are unified under a single objective.
+
+### 13.3 The Structure of Valence
+
+Valence is almost certainly not a scalar. It is a structured, multi-dimensional signal with components arising from different sources:
+
+**Physiological valence.** The closest analog to traditional reward signals: mappings from sensory states to good/bad that reflect survival-relevant quantities. Pain, energy availability, temperature, wear and structural integrity. In a robotic system, these might be hardcoded or slowly learned. They enter the system through dedicated S-cells that sense internal state.
+
+**Relational/social valence.** The desirability of states involving other agents: cooperation, approval, trust, social standing. This requires modeling other agents (possibly through dedicated simulation stacks; see Section 13.6) and is considerably more complex than physiological valence.
+
+**Epistemic valence.** The intrinsic reward of predicting well. This is already implicit in the loss function — lower prediction error *is* the training objective. The question is whether it should also be surfaced as an explicit valence signal at the top level, so that the system actively seeks states where it understands the world well. This connects to curiosity and active inference: the system should value not just comfort (low error in familiar territory) but also understanding (the capacity to predict in novel territory).
+
+**Narrative/coherence valence.** The desirability of states that maintain internal consistency — goals that persist, plans that unfold, identities that cohere. This is the most speculative component, but it addresses a real need: without some pressure toward coherence, a multi-timescale system with many competing signals may exhibit erratic or contradictory behavior. A valence signal that rewards narrative consistency — "I am the kind of agent that follows through on commitments" — could provide stabilizing structure.
+
+How these components are combined, weighted, and potentially constructed or modified by the system itself is a deep open question. A system that constructs its own valence is either very capable or very misaligned, depending on how the construction is constrained.
+
+### 13.4 The Adaptation Spectrum
+
+The system must adapt to changing circumstances at multiple timescales. The architecture supports a **continuum of adaptation speeds**:
+
+**Fixed weights** (slowest). Parameters learned during an extended training phase that capture the system's general world model, sensorimotor schemas, and prediction/error functions. These change rarely or never after initial training.
+
+**Online weight updates** (slow). Continual, low-learning-rate updates to cell parameters driven by ongoing prediction error. The system never fully stops learning, but learning rates may be modulated by surprise: high error increases learning rate, low error decreases it. This is consistent with the event-driven philosophy — learning, like computation, is proportional to surprise.
+
+**Low-rank adapters** (medium). Each cell may maintain a fast-adapting low-rank component (analogous to LoRA) that captures recent deviations from base parameters. When errors spike (new environment, broken actuator), the adapter learns quickly. When errors settle, it decays toward identity — either consolidating what it learned into base weights or letting transient adaptations go. This provides fast online adaptation without catastrophic forgetting.
+
+**Data-as-weights through attention** (fast). When a cell attends to entries in its working memory, those entries *function as* weights for that tick's computation — they modulate behavior through attention just as parameters modulate it through the network. Loading different long-term memories into working memory is functionally equivalent to switching parameter configurations, but it is fast, reversible, and requires no gradient computation.
+
+**State** (fastest). The state vector changes every tick and is the most immediate form of adaptation.
+
+These mechanisms are not mutually exclusive. A cell might simultaneously have stable base weights, a slowly-adapting low-rank component, a working memory full of context-relevant long-term retrievals, and a rapidly-evolving state. Each layer of the adaptation spectrum handles a different timescale of change.
+
+### 13.5 Regime Switching Through Memory
+
+The data-as-weights mechanism provides a natural account of **regime switching**: the ability to rapidly reconfigure behavior for a known context.
+
+Consider learning to catch a baseball with a glove. The first time, actual weight updates are required — the system must learn how the glove changes its sensorimotor dynamics. But once learned, the "glove schema" can be stored as a constellation of long-term memory entries at various cells in the stack — precomputed key-value pairs that, when loaded into working memory, shift predictions and motor commands to match glove dynamics.
+
+Subsequently, putting on the glove (a sensory change) triggers context recognition through attention over working memory, which triggers loading of the relevant long-term memories, which reconfigures the system for glove mode. No weight update is required. Taking off the glove evicts or deprioritizes those memories, and the system returns to bare-hand mode. This is fast, reversible, and compositional — multiple schemas can be partially active simultaneously.
+
+### 13.6 Parallel Stacks and Mixture of Experts
+
+An alternative (or complementary) mechanism for regime switching is **parallel stacks** — multiple cell stacks operating in parallel between shared bottom cells and shared top cells, with a routing mechanism that selects which stack handles the current context.
+
+This is structurally a mixture of experts, but in the cell architecture it has a natural interpretation: different stacks are different world models or sensorimotor schemas, and routing is itself a prediction — "given the current context, which expert's predictions will be most accurate?" The expert that wins routing is the one whose predictions best match incoming errors.
+
+Memory-based regime switching and expert routing are likely complementary. Memory handles *continuous* adaptation within a single expert (adjusting to slightly different conditions). Expert routing handles *discrete* regime changes (fundamentally different tasks or environments requiring different representational structure).
+
+### 13.7 Simulation Stacks
+
+The parallel stack idea extends naturally to **simulation**: cell stacks that are not grounded in reality but serve as internal models for planning and counterfactual reasoning.
+
+A **grounded stack** terminates in real S-cells and M-cells — the system's interface with the actual world. A **simulation stack** branches off from a high-level cell and extends downward, but terminates in *virtual* S-cells and M-cells that are not connected to any environment. The simulation stack shares parameters (and representational spaces) with the grounded stack — it uses the same learned world model — but has its own independent state and working memory, allowing it to explore counterfactual trajectories without corrupting the grounded state.
+
+A simulation stack asks: "if I took action $X$, what would I perceive?" It runs the same prediction-error dynamics, but against its own generated predictions rather than against external reality. The result is an internally-simulated future that can be evaluated for valence.
+
+**Multiple simulation stacks** running in parallel explore multiple possible futures simultaneously. A high-level cell that receives summaries from the simulation stacks can compare their projected valence and choose the action whose simulated future is most desirable. This is planning.
+
+**Dreaming** may be what happens when the grounded stack goes quiet (no sensory input, no motor output) but simulation stacks continue to run — replaying, recombining, and consolidating experiences. This would naturally occur if the system uses downtime to simulate scenarios that produced high prediction error in the past, improving its world model for future encounters.
+
+### 13.8 Distinguishing Reality from Simulation
+
+If the system has both grounded and simulation stacks using the same representational spaces, it must be able to distinguish perception from imagination. The architectural distinction is clear: grounded S-cells have their state clamped to external input (their errors reflect real surprise), while virtual S-cells are driven by internal predictions (their errors reflect simulated surprise). Whether this distinction should be reinforced through explicit coordinate metadata — tagging all messages with a "grounded" vs. "simulated" provenance flag — or left for the system to learn, is an open question. The design philosophy suggests providing the tag and letting the system learn what to do with it.
+
+### 13.9 Open Questions
+
+1. **Valence source**: how much is hardcoded, how much is learned, how much is endogenously constructed? What constraints prevent pathological valence construction?
+2. **Valence integration**: how are physiological, relational, epistemic, and narrative valence components combined?
+3. **Time horizon**: how does the system learn to optimize long-term valence rather than short-term? Does this emerge from working memory depth, or does it require explicit scaffolding?
+4. **Simulation control**: what triggers the creation of a simulation stack? How many run in parallel? How are their results integrated?
+5. **Reality binding**: should grounded vs. simulated provenance be architecturally enforced or learned?
+6. **Adaptation rate modulation**: how are learning rates and adapter decay schedules controlled? By surprise magnitude? By a neuromodulatory signal?
+7. **Expert routing**: how is routing decided? By prediction accuracy? By valence? By a separate routing cell?
+8. **Consolidation**: when and how do fast adaptations (memory, adapters) get consolidated into slow parameters (base weights)?
+9. **Allostatic connection**: is the high-valence prediction functionally equivalent to an allostatic setpoint? Can the setpoint itself change over time?
+
+---
+
+## 14. Readout for Practical Experiments
+
+### 14.1 The Short-Term Expedient
 
 For initial experiments (e.g., language modeling benchmarks to verify that the architecture can learn at all), a pragmatic readout can be implemented:
 
@@ -450,7 +545,7 @@ For initial experiments (e.g., language modeling benchmarks to verify that the a
 
 This is **not** the intended long-term architecture. It is a scaffolding for validation: can the cell stack learn useful representations? Do the predictions converge? Does working memory help?
 
-### 13.2 The Long-Term Vision
+### 14.2 The Long-Term Vision
 
 In the full architecture, generation is driven by M-cells (Section 5.3). A language M-cell outputs a token distribution; a proprioceptive S-cell reads back the generated token. The system learns to speak by learning the joint prediction of action and consequence.
 
@@ -478,3 +573,8 @@ The transition from the short-term LM-head readout to the full M-cell generation
 16. **Guaranteed liveness**: preventing system-wide quiescence in event-driven mode.
 17. **Event-driven training**: synchronous-first then transition, or event-driven from the start?
 18. **Event-sensor integration**: interface design for event cameras and other sparse sensors.
+19. **Valence source and construction**: hardcoded vs. learned vs. endogenous; constraints on pathological valence.
+20. **Simulation stacks**: triggering, parallelism, result integration, and reality binding.
+21. **Adaptation spectrum**: modulation of learning rates, adapter decay, and consolidation schedules.
+22. **Expert routing**: routing mechanism, interaction with simulation, and compositional expertise.
+23. **Regime switching**: memory-based vs. expert-based, interaction between the two.
