@@ -1,0 +1,560 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>cell-architecture</title>
+  
+    <script>
+        window.MathJax = {
+            tex: {
+              inlineMath: [['\\(', '\\)'], ['$', '$']],
+              displayMath: [['\\[', '\\]'], ['$$', '$$']],
+              processEscapes: true,
+              processEnvironments: true,
+              tags: 'ams',  // Enable equation numbering
+              tagSide: 'right',
+              tagIndent: '.8em',
+            },
+            options: {
+              ignoreHtmlClass: 'tex2jax_ignore',
+              processHtmlClass: 'tex2jax_process'
+            }
+        };
+    </script>
+    <script type="text/javascript" id="MathJax-script" defer src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-svg.js">
+    </script>
+    
+  <style type="text/css">body {
+  font-family: "Times New Roman", serif;
+  font-size: 10pt;
+  line-height: 1.2em;
+  max-width: 800px;
+  padding-left: 50px;
+  padding-right: 50px;
+}
+p {
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+hr {
+  display: none;
+}
+h1 {
+  font-size: 16pt;
+  text-align: center;
+  line-height: 1.2em;
+  margin-top: 20px;
+  border-top: 3px solid black;
+  border-bottom: 1px solid black;
+  padding-top: 20px;
+  padding-bottom: 20px;
+}
+h1 + p {
+  padding: 0 100px;
+  text-align: center;
+}
+h2 {
+  font-size: 14pt;
+  margin-top: 20px;
+  margin-bottom: 10px;
+}
+h2.abstract {
+  text-align: center;
+}
+h2.abstract + p {
+  padding: 0 50px;
+}
+th {
+  text-align: left;
+  padding-right: 10px;
+}
+td {
+  vertical-align: top;
+  border-top: 1px solid #DDDDDD;
+  padding-top: 10px;
+  padding-right: 10px;
+}
+ul, ol {
+  margin-top: 10px;
+}
+li {
+  margin-bottom: 10px;
+}
+</style>
+</head>
+<body>
+    <div id="content" class="tex2jax_process">
+        <h1>The Cell Architecture: A Predictive Coding Framework for Modular, Asynchronous Intelligence</h1>
+<p><strong>Richard Vermillion — Draft v0.1, March 2026</strong></p>
+<p><em>A living reference document. This captures the current state of thinking on an architecture for intelligent agents grounded in predictive coding, modular computation, and active perception.</em></p>
+<hr />
+<h2>1. Overview and Motivation</h2>
+<p>Current dominant architectures for sequence modeling and generation — transformers in particular — are monolithic, synchronous, and passive. A transformer processes a fixed context window in a single forward pass, produces an output, and has no internal state between calls. It cannot think without input. It cannot act without being prompted. It cannot choose what to attend to in the world. Its computation is yoked to its input: one token in, one token out.</p>
+<p>The Cell Architecture is a fundamentally different computational paradigm. It is:</p>
+<ul>
+<li><strong>Modular</strong>: computation is distributed across self-contained units ("cells") that communicate via typed messages.</li>
+<li><strong>Recurrent</strong>: each cell maintains persistent state across time steps ("ticks"), with working memory that gives it temporal depth.</li>
+<li><strong>Parallel</strong>: all cells update simultaneously, reading messages from the previous tick and publishing new ones. There is no sequential cascade.</li>
+<li><strong>Asynchronous</strong> (in the general case): cells can operate at different clock rates, with messages accumulating or decaying in slots between producer and consumer.</li>
+<li><strong>Active</strong>: perception is not passive reception but the consequence of motor actions. The system chooses what to sense.</li>
+<li><strong>Event-based</strong>: silence can be the message. If no error arrives, the prediction was good. If no prediction arrives, the last one still holds. Computation only happens where and when the world model breaks down. Computational cost is proportional to surprise.</li>
+</ul>
+<p>The architecture is grounded in <strong>predictive coding</strong>, the theory (with deep roots in neuroscience, information theory, and variational inference) that intelligent systems maintain a generative model of their environment and learn by minimizing prediction error at every level of abstraction. Higher-level cells predict the states of lower-level cells; lower-level cells report back the discrepancy. This is the only currency of communication: predictions flowing down, errors flowing up.</p>
+<p>The motivation is not to build a better language model (though the architecture can be evaluated in that regime). The motivation is to define a substrate for agents that model the world, act in it, perceive the consequences, and learn — continuously, modularly, and with the kind of flexible, multi-timescale cognition that current architectures lack.</p>
+<hr />
+<h2>2. Core Abstractions</h2>
+<p>The architecture consists of <strong>cells</strong> connected by <strong>edges</strong> in a directed acyclic graph (DAG). While complex topologies are contemplated (multi-modal, branching, agentic), the simplest realization is a <strong>linear stack</strong>.</p>
+<h3>2.1 Cells</h3>
+<p>A cell $C_i$ is a self-contained computational unit. It maintains:</p>
+<ul>
+<li>A <strong>state vector</strong> $s^t_i \in \mathbb{R}^{d_i}$ at each tick $t$.</li>
+<li>A <strong>working memory</strong> $m^t_i$ (a fixed-size key-value buffer; see Section 6).</li>
+<li>Learned parameters for its update function, prediction heads, and memory operations.</li>
+</ul>
+<p>Each cell has a dimensionality $d_i$ that may differ from other cells. The state vector, all incoming predictions, and all outgoing errors for cell $i$ share this dimensionality.</p>
+<h3>2.2 Edges</h3>
+<p>Cells are connected by three types of edges:</p>
+<ul>
+<li><strong>Prediction edges</strong> $p_{ij}$: cell $i$ predicts the state of cell $j$. Predictions flow "downward" (from more abstract to more concrete).</li>
+<li><strong>Error edges</strong> $e_{ij}$: cell $i$ reports the prediction error to cell $j$. Errors flow "upward" (from more concrete to more abstract). Every prediction edge $p_{ji}$ has a corresponding error edge $e_{ij}$ flowing in the opposite direction.</li>
+<li><strong>State (self) edges</strong> $s_{ii}$: the recurrent connection from a cell to itself. This is simply the state vector $s^t_i$ persisting (with update) from tick to tick.</li>
+</ul>
+<h3>2.3 Edge Values</h3>
+<p>Each edge carries a vector value at each tick. We use superscripts for time:</p>
+<ul>
+<li>$p^t_{ij} \in \mathbb{R}^{d_j}$: the prediction that cell $i$ makes about cell $j$'s state, published at tick $t$.</li>
+<li>$e^t_{ij} \in \mathbb{R}^{d_i}$: the error that cell $i$ computes and sends to cell $j$, published at tick $t$.</li>
+<li>$s^t_i \in \mathbb{R}^{d_i}$: cell $i$'s state at tick $t$.</li>
+</ul>
+<p>Note the dimensionality convention: predictions $p_{ij}$ live in the target cell's space ($\mathbb{R}^{d_j}$), while errors $e_{ij}$ live in the source cell's space ($\mathbb{R}^{d_i}$).</p>
+<hr />
+<h2>3. Notation and Conventions</h2>
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>$C_i$</td>
+<td>Cell $i$</td>
+</tr>
+<tr>
+<td>$d_i$</td>
+<td>Dimensionality of cell $i$'s state</td>
+</tr>
+<tr>
+<td>$s^t_i$</td>
+<td>State of cell $i$ at tick $t$</td>
+</tr>
+<tr>
+<td>$p^t_{ij}$</td>
+<td>Prediction from cell $i$ about cell $j$, at tick $t$</td>
+</tr>
+<tr>
+<td>$e^t_{ij}$</td>
+<td>Error from cell $i$ sent to cell $j$, at tick $t$</td>
+</tr>
+<tr>
+<td>$m^t_i$</td>
+<td>Working memory of cell $i$ at tick $t$</td>
+</tr>
+<tr>
+<td>$p^t_{*i}$</td>
+<td>All incoming predictions to cell $i$ at tick $t$</td>
+</tr>
+<tr>
+<td>$e^t_{*i}$</td>
+<td>All incoming errors to cell $i$ at tick $t$</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Time convention</strong>: a cell's state at tick $t+1$ is a function of tick-$t$ quantities. Predictions are computed from the current state at the same tick. Errors compare the <em>previous tick's</em> prediction against the <em>current tick's</em> state. All cells update in parallel; there are no within-tick dependencies between cells.</p>
+<hr />
+<h2>4. Update Rules</h2>
+<p>The dynamics of the system are governed by four equations, evaluated in parallel across all cells at each tick.</p>
+<h3>4.1 State Update</h3>
+<p>$$s^{t+1}_i = s^t_i + g_i(s^t_i,\; p^t_{<em>i},\; e^t_{</em>i},\; m^t_i)$$</p>
+<p>The state update is a <strong>residual</strong>: the cell computes a delta from its current state, incoming predictions, incoming errors, and working memory (see Section 6 for the internal structure of $g_i$). The residual form ensures that the default behavior is persistence — a cell's state is stable unless there is reason to change it.</p>
+<p>More generally, the residual connection admits several variants:</p>
+<p>$$s^{t+1}_i = \beta^t_i \, s^t_i + g_i(\ldots) \qquad \text{(state decay)}$$</p>
+<p>$$s^{t+1}_i = \beta^t_i \, s^t_i + (1 - \beta^t_i) \, s^0_i + g_i(\ldots) \qquad \text{(decay toward ground state)}$$</p>
+<p>where $s^0_i$ is a learned <strong>ground state</strong> — the cell's "no information prior" — and $\beta^t_i \in (0, 1]$ controls the persistence of the previous state. The decay factor $\beta^t_i$ may be a learned constant per cell or a function of the current state (and, in particular, of the cell's self-estimated uncertainty; see Section 7.6). The pure residual form is the special case $\beta^t_i = 1$. The decay-toward-ground-state form ensures that a cell which stops receiving informative inputs forgets back to its prior rather than decaying to zero.</p>
+<h3>4.2 Prediction</h3>
+<p>$$p^t_{ij} = h_j^{(i)}(s^t_i)$$</p>
+<p>Each cell $i$ has a <strong>separate prediction head</strong> $h_j^{(i)}$ for each cell $j$ that it predicts. The prediction is a function of the current state, published at the same tick. Prediction heads are MLPs (with normalization; details TBD).</p>
+<h3>4.3 Error</h3>
+<p>$$e^t_{ij} = f(p^{t-1}_{ji},\; s^t_i)$$</p>
+<p>The error compares what cell $j$ predicted about cell $i$ <em>last tick</em> against cell $i$'s <em>current</em> state. In the simplest form, $f$ is the difference $p^{t-1}_{ji} - s^t_i$. More complex error functions (sparse, precision-weighted; see Section 7) are contemplated.</p>
+<p>The error computation is <strong>uniform across the stack</strong>. The only asymmetry is in how $s^t_i$ is determined (exogenous for sensory cells, learned for interior cells), not in how the error is calculated.</p>
+<h3>4.4 Memory Update</h3>
+<p>$$m^{t+1}_i = f_{\text{mem}}^{(i)}(m^t_i,\; s^t_i,\; p^t_{<em>i},\; e^t_{</em>i})$$</p>
+<p>Memory updates in parallel with state, consuming the same tick-$t$ inputs. See Section 6 for the structure of $f_{\text{mem}}$.</p>
+<h3>4.5 Execution Model</h3>
+<p>All four equations are evaluated <strong>in parallel across all cells</strong>. At tick $t$, every cell reads only tick-$(t-1)$ state values from other cells, mediated through predictions and errors computed as intermediate quantities. There is no within-tick cascade from top to bottom and back. Each cell operates as a self-contained unit with an <strong>inbox</strong> (incoming predictions, incoming errors, prior state, memory) and an <strong>outbox</strong> (new predictions, new errors, updated state, updated memory).</p>
+<p>This parallel execution model is a deliberate design choice. It ensures:</p>
+<ol>
+<li><strong>No sequential bottleneck</strong>: computation scales with the number of cells, not the depth of the graph.</li>
+<li><strong>Compositionality</strong>: cells can be added, removed, or rewired without changing the execution model.</li>
+<li><strong>Compatibility with asynchronous operation</strong>: because cells only read from slots, those slots can be updated at different rates (see Section 11).</li>
+</ol>
+<hr />
+<h2>5. Cell Types</h2>
+<h3>5.1 Interior Cells</h3>
+<p>An interior cell $C_i$ has both incoming and outgoing edges in both directions. It receives predictions from above, errors from below, and sends predictions downward and errors upward. Its state is a learned recurrent function of its inputs (Equation 4.1).</p>
+<p>In a linear stack, an interior cell has exactly two incoming edges (one prediction from above, one error from below) and two outgoing edges (one prediction downward, one error upward), plus its self-edge. In a branching graph, a cell may have multiple prediction and error edges in either direction.</p>
+<h3>5.2 Sensory Cells (S-Cells)</h3>
+<p>An S-cell is a bottom cell whose state is <strong>clamped to external input</strong>. Its state $s^t_0$ is an embedding of sensory data (a token embedding, patch embedding, audio frame, joint position, etc.). The S-cell performs minimal computation: it compares the incoming prediction against its perceived state and sends the error upward.</p>
+<p>$$e^{t}_{0j} = f(p^{t-1}_{j0},\; s^t_0)$$</p>
+<p>S-cells have no outgoing prediction edges (there is nothing below them to predict) and no meaningful state update function (their state is exogenous).</p>
+<p><strong>Crucially, the input that an S-cell perceives is generally conditioned on motor actions</strong> (see Section 10). The "next token" is only the next token because a motor action chose to read it. A visual input is only that particular view because a motor action directed gaze there.</p>
+<h3>5.3 Motor Cells (M-Cells)</h3>
+<p>An M-cell is a bottom cell whose state <strong>drives an action</strong> in the environment. Where an S-cell's state is determined by perception (the world writes to it), an M-cell's state is determined by the prediction from the cell above it (the model writes to the world through it).</p>
+<p>$$s^t_{\text{motor}} = \text{constrain}(p^{t}_{j,\text{motor}})$$</p>
+<p>The constraint function may include clipping, rate-limiting, safety bounds, or discretization (e.g., sampling from a token distribution). The M-cell's state <em>is</em> the motor command.</p>
+<p>M-cells are <strong>causal dead ends</strong> internally. Their state exits the system into the environment and does not return along the same edge. There is no meaningful error edge from an M-cell in the usual sense — the "error" for a motor prediction is tied to the proprioceptive consequence (see below).</p>
+<h3>5.4 The Sensorimotor Loop</h3>
+<p>An M-cell and a proprioceptive S-cell are typically connected to a common parent (or ancestor) cell, but <strong>not directly to each other</strong>. The causal link between them passes through the environment:</p>
+<p>$$C_{\text{parent}} \xrightarrow{p} M\text{-cell} \rightarrow \text{environment} \rightarrow S\text{-cell} \xrightarrow{e} C_{\text{parent}}$$</p>
+<p>The parent cell generates a <strong>joint prediction</strong>: "I will issue motor command $X$ and I will perceive consequence $Y$." The proprioceptive S-cell's error tells the parent whether the consequence matched the prediction. Over time, the parent learns a forward model of the environment — the relationship between actions and their sensory consequences — without any explicit model of the environment's dynamics.</p>
+<p>This means:</p>
+<ul>
+<li>The system must <strong>learn</strong> the action-consequence relationship through experience.</li>
+<li>Motor learning is driven by <strong>proprioceptive prediction error</strong>, not by direct gradient from the motor output.</li>
+<li>The architecture does not need to know anything about the environment's physics; it only needs S-cells and M-cells wired to the same parent structure.</li>
+</ul>
+<h3>5.5 Top Cells</h3>
+<p>A top cell has no incoming prediction and sends no outgoing error. It is driven purely by error signals propagating up from below, plus its own recurrence and memory. It is the most abstract layer in the stack — it generates top-down expectations but never has its own expectations violated by a higher cell.</p>
+<p>$$s^{t+1}_{\text{top}} = s^t_{\text{top}} + g_{\text{top}}(s^t_{\text{top}},\; e^t_{*,\text{top}},\; m^t_{\text{top}})$$</p>
+<h3>5.6 Boundary Conditions (Linear Stack Example)</h3>
+<p>For a three-cell linear stack $C_0$ (sensory), $C_1$ (interior), $C_2$ (top):</p>
+<table>
+<thead>
+<tr>
+<th>Cell</th>
+<th>Incoming</th>
+<th>Outgoing</th>
+<th>State determined by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>$C_0$ (S-cell)</td>
+<td>$p_{10}$</td>
+<td>$e_{01}$</td>
+<td>Exogenous (sensory embedding)</td>
+</tr>
+<tr>
+<td>$C_1$ (interior)</td>
+<td>$p_{21}$, $e_{01}$</td>
+<td>$p_{10}$, $e_{12}$</td>
+<td>Learned: $g_1(s^t_1, p^t_{21}, e^t_{01}, m^t_1)$</td>
+</tr>
+<tr>
+<td>$C_2$ (top)</td>
+<td>$e_{12}$</td>
+<td>$p_{21}$</td>
+<td>Learned: $g_2(s^t_2, e^t_{12}, m^t_2)$</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>6. Working Memory and Attention</h2>
+<h3>6.1 The State Update as Attention</h3>
+<p>The state update function $g_i$ is implemented as an <strong>attention mechanism over a working memory buffer</strong>. Each cell maintains a fixed-size key-value buffer $m^t_i$ containing entries derived from recent ticks of its own computational history.</p>
+<p>At each tick:</p>
+<ol>
+<li>The current inputs — $s^t_i$, $p^t_{<em>i}$, $e^t_{</em>i}$ — are projected into <strong>keys</strong> and <strong>values</strong> that are appended to the working memory buffer (with eviction of old entries as needed).</li>
+<li>The same inputs are projected into <strong>queries</strong> that attend over the full buffer via multi-head attention.</li>
+<li>The attention output is passed through a projection and MLP to produce the residual state update.</li>
+</ol>
+<p>This means the cell's state transition is <strong>not Markov in the state alone</strong> — it has access to a window of its own recent history. The cell can recognize temporal patterns: repeated errors, converging predictions, oscillating states.</p>
+<p>One possible result of this that we hope to explore in testing is that the cell can form an emergent model of its own precision, noise, surprise, and confusion.</p>
+<h3>6.2 Projection Structure</h3>
+<p>Whether the projections from state, predictions, and errors into query/key/value space are shared (a single projection over the concatenation) or structured (separate projections per input type) is an open design choice. The structured variant enforces that the model can easily distinguish "this key came from a prediction" versus "this key came from an error" without having to learn that from content alone.</p>
+<h3>6.3 Coordinate Metadata</h3>
+<p>Entries in the working memory buffer are tagged with <strong>coordinate metadata</strong>: at minimum, the tick number and the provenance (state, prediction from cell $j$, error to cell $k$). This metadata is encoded into the keys and queries, allowing the attention mechanism to condition on <em>when</em> and <em>where</em> information came from. This follows the design philosophy of <strong>making emergent behavior easy</strong>: the model must learn how to <em>use</em> the metadata, but it doesn't have to <em>infer</em> it from patterns in the content stream.</p>
+<p>Standard positional encodings (e.g., RoPE on tick indices) are likely insufficient, especially once long-term memory and multi-rate clocks are introduced. Richer coordinate attention schemes — encoding wall-clock time, modality provenance, cell identity — are anticipated.</p>
+<h3>6.4 Eviction Policy</h3>
+<p>The working memory buffer is <strong>fixed-size</strong>. When the buffer is full, entries must be evicted. Candidate policies include:</p>
+<ul>
+<li>Oldest-first (simple FIFO).</li>
+<li>Lowest-attention-weight (learned importance).</li>
+<li>Compression: summarize old entries into fewer, denser key-value pairs.</li>
+</ul>
+<p>The eviction policy is an open research question. A learned policy is preferred, as it lets the cell decide what to remember.</p>
+<hr />
+<h2>7. Rich Messages and Precision</h2>
+<h3>7.1 Beyond Point Predictions</h3>
+<p>In the base architecture, predictions and errors are point vectors in $\mathbb{R}^{d_i}$. However, the edges may optionally carry <strong>precision metadata</strong>: additional structure encoding confidence, variance, or uncertainty.</p>
+<p>A prediction $p^t_{ij}$ might carry:</p>
+<ul>
+<li>A <strong>point estimate</strong> $\mu^t_{ij} \in \mathbb{R}^{d_j}$ (the predicted state).</li>
+<li>A <strong>variance structure</strong> $\sigma^t_{ij} \in \mathbb{R}^{d_j}$ (a diagonal encoding of precision/confidence).</li>
+</ul>
+<p>An error $e^t_{ij}$ might carry:</p>
+<ul>
+<li>The <strong>residual</strong> $\delta^t_{ij} = p^{t-1}_{ji} - s^t_i$.</li>
+<li>An estimate of <strong>error reliability</strong>: whether the error reflects a genuinely bad prediction or noisy state (inferred from recent error variance).</li>
+</ul>
+<h3>7.2 Precision-Weighted Errors</h3>
+<p>If precision metadata is available, the error computation can be precision-weighted:</p>
+<p>$$e^t_{ij} = f(p^{t-1}_{ji},\; s^t_i,\; \sigma^{t-1}_{ji})$$</p>
+<p>A large residual on a low-confidence prediction is less surprising than a small residual on a high-confidence one. The error signal becomes "how surprised should you actually be" rather than "how far off were you."</p>
+<p>This connects directly to the predictive coding literature where precision weighting arbitrates between top-down priors and bottom-up evidence.</p>
+<h3>7.3 Design Philosophy</h3>
+<p>The approach to precision follows the architecture's general principle: <strong>provide scaffolding that makes the desired behavior easy to learn, but don't over-constrain it.</strong> An explicit variance diagonal gives the model a leg up. But the attention mechanism over working memory (Section 6) can learn richer notions of confidence, reliability, and noise from temporal patterns in the explicit metadata — and from patterns that go beyond what any hand-designed structure encodes.</p>
+<h3>7.4 Self-Uncertainty Estimation</h3>
+<p>Rather than relying solely on emergent precision, each cell can learn to <strong>predict its own uncertainty</strong> through a dedicated auxiliary head.</p>
+<p>An important subtlety: raw state variance is not the right target. A cell whose state is changing rapidly because it is coherently tracking well-predicted inputs is <em>confident</em> — that is purposeful evolution, not confusion. A cell whose state is changing rapidly because it keeps being corrected by surprising errors is <em>uncertain</em> — that is flailing. The uncertainty estimate must disentangle these two cases.</p>
+<p>The key insight is that the information needed for this disentanglement is locally available. The cell knows its own state delta $g_i(...)$, and it knows its incoming errors $e^t_{<em>i}$ and outgoing errors $e^t_{i</em>}$. The relevant signal is not "how much is my state changing" but "how much of my state change is driven by error correction." A simple proxy:</p>
+<p>$$\hat{u}^t_i \propto |g_i(\ldots)| \cdot (|e^t_{<em>i}| + |e^t_{i</em>}|)$$</p>
+<p>This is high when the state is changing <em>and</em> errors are large (corrective motion), and low when the state is changing but errors are small (purposeful evolution). More sophisticated formulations — a learned head trained against error-weighted state variance, or a decomposition of the state delta into predicted and corrective components — are possible, but even the simple version captures the right distinction.</p>
+<p>The uncertainty estimate (whether scalar $\hat{u}^t_i$ or a diagonal $\hat{\sigma}^t_i$) has a natural destination: it can be attached to outgoing predictions as the precision metadata described in Section 7.1, giving receiving cells a calibrated confidence signal. And it feeds directly into the state decay $\beta^t_i$ (Section 4.1) and attention modulation (Section 7.5).</p>
+<p>The <em>interface</em> is what matters for the architecture: the uncertainty estimate exists, it modulates behavior, and it is attached to outgoing messages. What goes inside the estimate — simple error-weighted norm, learned head, or something more exotic — can be swapped and refined without changing anything else.</p>
+<h3>7.5 Uncertainty-Modulated Attention</h3>
+<p>A cell's self-estimated uncertainty should modulate how it processes information. The mechanism is <strong>query modulation</strong>: the uncertainty signal $\hat{u}^t_i$ scales or transforms the <strong>query projections</strong> in the working memory attention mechanism (Section 6), altering what the cell looks for without changing the record of what it has seen.</p>
+<p>The intuition is that a cell should attend differently depending on how confident it is:</p>
+<ul>
+<li><strong>High uncertainty</strong> (confused, recently surprised): broaden queries over working memory, look for disambiguating context, cast a wider net across past states and incoming signals. The cell is saying: "I don't know what's going on, let me reconsider."</li>
+<li><strong>Low uncertainty</strong> (confident, on track): sharpen queries, reinforce the current trajectory, focus on the most relevant entries. The cell is saying: "I know what's happening, let me execute."</li>
+</ul>
+<p>The modulation targets queries specifically, not keys or values. The keys and values in working memory are the record of what happened — what was predicted, what errors arrived, what states were visited. Modulating them based on transient uncertainty would be rewriting history. But modulating the queries is asking a different question of the same history: "given how confused I am right now, what should I be looking for?" Keys and values are also potentially cached or shared across ticks, and per-tick modulation would complicate that. Queries are always freshly generated each tick, so modulating them costs nothing architecturally.</p>
+<p>This is analogous to the noise-level QKV modulation in the Qwen Vision model, where the externally-provided noise level modulates attention during diffusion. The key differences are that (1) the modulation signal here is <strong>endogenous</strong> — the cell modulates its own attention based on its own learned assessment of its own state, creating a tighter feedback loop — and (2) the modulation is <strong>Q-only</strong>, preserving the integrity of the stored context.</p>
+<p>K/V modulation is not ruled out — there may be cases where it is useful — but the default is Q-only.</p>
+<h3>7.6 Decommitment Dynamics</h3>
+<p>The self-uncertainty estimate, combined with the state-dependent decay $\beta^t$ (Section 4.1), enables a dynamic that has no analog in diffusion models: <strong>decommitment</strong>.</p>
+<p>In diffusion, the trajectory from noise to signal is monotonic. The model progressively commits to a specific output and never reverses direction; the noise schedule is external and one-way. In the Cell Architecture, uncertainty is endogenous and non-monotonic. A cell can be confident, then receive a surprising error, causing its uncertainty estimate to spike. When this happens:</p>
+<ol>
+<li><strong>State decay increases</strong>: $\beta^t_i$ drops (driven by high uncertainty), and the state relaxes toward the ground state $s^0_i$. The cell releases its commitment to its current representation.</li>
+<li><strong>Queries broaden</strong>: the uncertainty-modulated queries shift the cell into a more exploratory attention regime, searching working memory more widely for disambiguating context.</li>
+<li><strong>Predictions become less precise</strong>: the uncertainty estimate attached to outgoing predictions rises, signaling to receiving cells that these predictions should be discounted.</li>
+<li><strong>The cell reinterprets</strong>: with a more open state and broader queries, the cell can settle onto a different trajectory, one more consistent with the surprising new evidence.</li>
+<li><strong>Recommitment</strong>: as the new interpretation stabilizes, errors diminish, uncertainty drops, $\beta^t_i$ rises, queries sharpen, and the cell locks onto its revised representation.</li>
+</ol>
+<p>This produces a cycle — <strong>commit → surprise → decommit → broaden → reinterpret → recommit</strong> — that can occur at any level of the stack independently. A low-level cell might decommit because of noisy sensory input while a high-level cell remains confident in its abstract model. Or a high-level cell might decommit because accumulated errors indicate its world model is wrong, while low-level cells continue tracking sensory input normally. The architecture supports hierarchical, asynchronous revision of beliefs at every level of abstraction.</p>
+<p>Crucially, a cell that is evolving its state rapidly along a well-predicted trajectory — high state variance but low error-driven uncertainty — does <em>not</em> decommit. The disentanglement of purposeful evolution from corrective flailing (Section 7.4) is what makes the decommitment dynamics stable and meaningful.</p>
+<hr />
+<h2>8. Multi-Tier Memory</h2>
+<h3>8.1 The Memory Hierarchy</h3>
+<p>Working memory (Section 6) is a fast, fixed-size buffer. For longer-term storage and retrieval, a <strong>multi-tier memory hierarchy</strong> is contemplated:</p>
+<ul>
+<li><strong>Tier 1 (Working Memory)</strong>: the KV buffer described above. Fast, small, always available. Updated every tick.</li>
+<li><strong>Tier 2+ (Long-Term Memory)</strong>: larger, slower stores of precomputed key-value pairs. Queried asynchronously based on recent working-memory queries. Results are loaded into working memory when relevant.</li>
+</ul>
+<h3>8.2 Representation-Specific Storage</h3>
+<p>Long-term memory is <strong>per-cell and representation-specific</strong>. Stored key-value pairs live in cell $i$'s representation space ($\mathbb{R}^{d_i}$), tagged with coordinate metadata (timestamps, provenance, modality). You cannot dump raw sensory tokens into a higher cell's long-term memory; the stored representations must be in that cell's learned abstract space.</p>
+<h3>8.3 Asynchronous Loading</h3>
+<p>Long-term memory queries run <strong>asynchronously</strong>, decoupled from the main tick loop. An auxiliary process monitors recent queries from working memory, searches the long-term store for relevant entries, and loads them into the working memory buffer. This is analogous to an L1/L2 cache hierarchy: working memory is L1 (fast, small, always checked), long-term memory is L2 (slower, larger, loaded on demand).</p>
+<p>The details of the long-term memory system — storage format, indexing, retrieval algorithm, the interface between tiers — are open research questions.</p>
+<hr />
+<h2>9. Loss and Training</h2>
+<h3>9.1 The Loss Function</h3>
+<p>The loss at each tick is the sum of per-edge error terms:</p>
+<p>$$\mathcal{L}^t = \sum_{(ij) \in \mathcal{E}} \text{loss}(e^t_{ij})$$</p>
+<p>where $\mathcal{E}$ is the set of all error edges in the graph. The simplest choice for $\text{loss}$ is the squared norm $|e^t_{ij}|^2$, but other choices (L1, Huber, precision-weighted) are possible.</p>
+<p>This means:</p>
+<ul>
+<li>The system's sole objective is to <strong>predict well at every level</strong>.</li>
+<li>The loss decomposes into <strong>per-edge, per-tick terms</strong> — there is no separate reconstruction loss, contrastive objective, or auxiliary task.</li>
+<li>Each interior cell has access to (at least) two local loss signals: the error it sends upward (how well it was predicted) and the error it receives from below (how well it predicted).</li>
+</ul>
+<h3>9.2 The Training Problem</h3>
+<p>The true gradients of $\mathcal{L}^t$ with respect to any cell's parameters are deeply entangled across the full graph and across time (through recurrence and memory). Full backpropagation through time (BPTT) would give exact gradients but is expensive, memory-intensive, and biologically implausible.</p>
+<p>The architecture is designed to support a <strong>spectrum of training approaches</strong>, from cheap-and-approximate to expensive-and-exact:</p>
+<p><strong>Local backprop with detached messages.</strong> Each cell treats incoming predictions and errors as fixed inputs (no gradient flows across cell boundaries). The cell backpropagates only through its own parameters: $g_i$, $h_j^{(i)}$, $f_{\text{mem}}^{(i)}$. This is cheap, parallelizable, and gives each cell a clear local learning signal. But it is <strong>myopic</strong>: a cell cannot learn to request better inputs by shaping the errors it sends, and a cell cannot learn how its predictions are used downstream.</p>
+<p><strong>Eligibility traces with global error modulation.</strong> Each cell maintains local traces of "what parameter changes would have changed my output." The global scalar $\mathcal{L}^t$ (or its temporal difference) modulates these traces — a REINFORCE-like signal saying "whatever you just did, do more or less of it." This is much cheaper than BPTT but provides some credit assignment across cell boundaries. This approach is particularly relevant for M-cell motor prediction heads, which have no direct local loss and <em>require</em> a non-local signal.</p>
+<p><strong>Low-rank gradient approximations.</strong> Cells could pass compressed or low-rank approximations of gradient information along edges, providing richer inter-cell credit assignment than a scalar signal without the full cost of BPTT.</p>
+<p><strong>Full BPTT (upper bound).</strong> Unrolling the computation graph across ticks and cells and backpropagating through everything. Useful as a benchmark to measure how much the approximate methods leave on the table, but not a target for the production system.</p>
+<h3>9.3 The M-Cell Gradient Problem</h3>
+<p>M-cells present a specific training challenge. The motor prediction head projects into an environmental sink — there is no error edge returning from the M-cell. The only signal about whether a motor command was <em>correct</em> arrives indirectly, through the proprioceptive S-cell's error, which reaches the parent cell but not the motor head directly.</p>
+<p>Under local backprop, the motor head receives <strong>no gradient at all</strong>. This makes eligibility traces with global (or at least parent-local) error modulation a likely <em>necessary</em> component of the training regime for motor learning, not merely a nice-to-have.</p>
+<h3>9.4 Open Questions</h3>
+<p>The choice of training method is the architecture's <strong>central open research question</strong>. The design philosophy is to characterize the failure modes of simple methods first, then let those failures guide the introduction of more sophisticated signals — analogous to how biological evolution may have developed neuromodulatory systems in response to optimization pressures.</p>
+<p>Candidate mechanisms to explore include:</p>
+<ul>
+<li>Hebbian-like eligibility traces modulated by global or semi-local error signals.</li>
+<li>Neuromodulatory "broadcast" signals (analogous to dopamine) that modulate learning rates or trace decay across cells.</li>
+<li>Inter-cell salience signals that allow cells to flag important state changes.</li>
+<li>EMA-smoothed gradient estimates passed along edges.</li>
+<li>Hybrid approaches that use BPTT over short windows within a cell but approximate signals between cells.</li>
+</ul>
+<hr />
+<h2>10. Active Perception</h2>
+<h3>10.1 Perception as Action</h3>
+<p>In this architecture, <strong>all perception is action-conditioned</strong>. Every sensory input is the consequence of a motor decision, even if that decision is the default "continue doing what you were doing."</p>
+<p>A token sensor does not passively receive the next token in a stream. Something — an M-cell — chose to <em>read</em> that token rather than skip backward, pause, or switch to a different input source. A visual sensor does not passively receive an image. Something chose to look in that direction, at that distance, with that focus.</p>
+<p>This means the parent cell that predicts both the motor action and its sensory consequence is always making a <strong>joint prediction</strong>: "given that I do $X$, I will perceive $Y$." The sensory error tells it whether the joint prediction was correct.</p>
+<h3>10.2 Examples</h3>
+<p><strong>Language</strong>: An M-cell outputs a "read action" (read-next-token, skip-back-$n$-tokens, pause). The S-cell perceives whatever token is at the resulting position. The parent cell must learn that the token it predicts depends on the action it chose.</p>
+<p><strong>Vision</strong>: An M-cell controls gaze direction (saccade, head turn, camera selection). The S-cell perceives the resulting visual field. The parent cell must learn the relationship between gaze commands and visual input.</p>
+<p><strong>Embodiment</strong>: M-cells control actuators (joint torques, gripper force). Proprioceptive S-cells sense the resulting body state (joint positions, contact forces). The parent cell must learn forward dynamics.</p>
+<h3>10.3 Minimizing Long-Term Surprisal</h3>
+<p>A system that minimizes only <em>immediate</em> prediction error can learn to avoid surprise trivially — by never looking, never acting, never gathering information. But a system that minimizes surprisal over a <strong>longer horizon</strong> (enabled by working memory and multi-tier memory giving temporal depth) must be <em>curious</em>: it must seek out information now that reduces future surprisal, even if looking introduces short-term prediction errors.</p>
+<p>This is <strong>active inference</strong>: the agent acts to gather information that improves its world model, not merely to confirm what it already believes. The behavior emerges from the architecture's structure — cells with temporal depth optimizing over longer horizons will naturally learn to "look left before crossing the street" because the short-term surprise of seeing (or not seeing) a bus is far less costly than the long-term surprise of being hit by one.</p>
+<h3>10.4 The "Quiet" Mechanism</h3>
+<p>M-cells need a <strong>quiet option</strong>: the ability to produce no output. For a language M-cell, this could be a special "silence" token in the output distribution, or a binary gate with a learned probability of speaking versus not speaking.</p>
+<p>This is important because it means the system must learn <strong>when to act</strong>, not just how. During quiet ticks, the rest of the cell stack continues to run — higher cells are predicting, receiving errors, updating state and memory. The system is <em>thinking</em>. When it finally does act, the action is informed by however many ticks of internal processing occurred since the last action. The depth of "thought" is <strong>dynamic</strong>, not fixed.</p>
+<p>This also opens the door to <strong>internal simulation</strong>: during quiet ticks, the system may run predictions about what it <em>would</em> perceive under various actions, using its learned world model to evaluate options before committing. That is planning.</p>
+<hr />
+<h2>11. Extensions and Open Questions</h2>
+<h3>11.1 Multi-Rate Clocks</h3>
+<p>In the general case, cells may operate at <strong>different clock rates</strong>. A low-level sensory cell might tick at high frequency (processing raw audio frames), while a high-level abstract cell might tick much more slowly (updating a world model). Communication is handled via message <strong>slots</strong>:</p>
+<ul>
+<li>A faster cell's errors accumulate in the slower cell's inbox (e.g., as an exponential moving average) until the slower cell is ready to process them.</li>
+<li>A slower cell's predictions persist (possibly decaying) in the faster cell's inbox between updates.</li>
+</ul>
+<p>The cell interface — typed vectors in slots — is invariant to clock rate. A cell does not need to know whether its neighbor is running at the same rate or ten times slower; it simply reads whatever is in the slot.</p>
+<h3>11.2 Multi-Modal Merge</h3>
+<p>For multi-modal processing, separate linear stacks handle each modality (vision, language, audio, proprioception). At some level, these stacks <strong>merge</strong> into a cell that predicts the top of each modality stack through separate prediction heads $h_j^{(i)}$, one per child.</p>
+<p>The merge cell is forced to build a representation rich enough to predict <em>all</em> child modalities through its single state vector. This is a <strong>bottleneck argument</strong>: the state must capture whatever structure is common across modalities. The result is an emergent multi-modal representation — not one that was explicitly designed, but one that arose because it was necessary for prediction.</p>
+<h3>11.3 Asynchronous and Distributed Operation</h3>
+<p>Because cells communicate only via message slots and update in parallel, the architecture is naturally compatible with <strong>distributed execution</strong>. Cells can run on different devices, with message slots implemented as network buffers. Latency in message delivery is equivalent to a clock-rate mismatch — the receiving cell simply works with the most recent available message.</p>
+<h3>11.4 Neuromodulatory Signals</h3>
+<p>Beyond prediction and error, the architecture may benefit from additional message types:</p>
+<ul>
+<li><strong>Salience signals</strong>: a cell flags that its state has changed significantly, prompting neighbors to attend.</li>
+<li><strong>Reward/dopamine analogs</strong>: a global or semi-global scalar broadcast that modulates learning rates or eligibility trace decay.</li>
+<li><strong>Arousal/gain signals</strong>: modulating the overall sensitivity or update magnitude of a cell.</li>
+</ul>
+<p>These are speculative extensions, to be explored if and when the failure modes of simpler training methods demand them.</p>
+<h3>11.5 Lagged Predictions</h3>
+<p>In the base architecture, $p^t_{ij}$ predicts cell $j$'s state at the next tick. A generalization allows a cell to predict a lower cell's state <strong>$T$ ticks in the future</strong>, where $T$ may vary by level. Higher cells, operating more abstractly, might predict further ahead. This introduces additional timing complexity but could improve credit assignment and enable hierarchical temporal abstraction.</p>
+<hr />
+<h2>12. Event-Driven Operation</h2>
+<h3>12.1 From Synchronous to Event-Based</h3>
+<p>The synchronous architecture described so far — every cell computes every tick — is the simplest execution model and the right starting point for implementation. But the message-slot interface already contains the seeds of a more efficient paradigm. We have already noted that slots can hold stale predictions (decaying) or accumulated errors (as EMAs) when cells run at different rates. The conceptual step from "messages might be stale because clocks differ" to "messages are only sent when they carry meaningful information" is small, but the practical implications are large.</p>
+<p>In the <strong>event-driven</strong> variant, a cell publishes a message only when it exceeds a <strong>surprise threshold</strong>:</p>
+<ul>
+<li>An error $e^t_{ij}$ is sent only if $|e^t_{ij}| &gt; \epsilon_e$. If the prediction was accurate enough, silence is the message.</li>
+<li>A prediction $p^t_{ij}$ is re-sent only if $|p^t_{ij} - p^{t-1}_{ij}| &gt; \epsilon_p$. If the prediction hasn't changed, the last one still holds.</li>
+<li>A cell may skip its own state update entirely if no incoming events have arrived and its internal dynamics are quiescent.</li>
+</ul>
+<p>The thresholds $\epsilon_e$ and $\epsilon_p$ could be fixed hyperparameters, learned per-cell, or dynamically adjusted — another instance of the "provide scaffolding, let the rest emerge" design philosophy.</p>
+<h3>12.2 Computation Proportional to Surprise</h3>
+<p>In the synchronous model, computational cost is proportional to the number of cells times the number of ticks — constant regardless of whether the input is novel or familiar. In the event-driven model, cost is proportional to <strong>surprise</strong>: the total amount of prediction error flowing through the graph.</p>
+<p>A familiar, predictable environment produces few events. Cells that have "figured out" their input go idle. A novel or changing environment generates cascades of events — errors propagating upward trigger state changes, which change predictions, which generate new errors at lower levels. Computational resources concentrate automatically where the world model is failing.</p>
+<p>This is remarkably consistent with cortical metabolic data: brain regions processing predictable stimuli show reduced activity, while novel or unexpected stimuli produce widespread activation.</p>
+<h3>12.3 Sparse Cascades and Attention Allocation</h3>
+<p>Event-driven operation creates a natural <strong>attention allocation</strong> mechanism. Consider an agent in a stable environment: most cells are idle, predictions are holding, errors are below threshold. Then something unexpected happens — an anomalous sensory input produces a large error at an S-cell. This error propagates upward as an event, triggering state updates in interior cells. Those state changes alter predictions, potentially generating new errors at other branches of the graph. The cascade of events <em>is</em> the system paying attention to the anomaly.</p>
+<p>This connects back to active perception (Section 10): the cascade might trigger motor actions (saccade toward the unexpected stimulus, pause reading to re-examine a passage) that generate further sensory events. The system doesn't need an explicit attention mechanism — attention emerges from the dynamics of surprise propagation.</p>
+<h3>12.4 Integration with Event-Based Sensors</h3>
+<p>The event-driven architecture is a natural fit for <strong>event-based sensors</strong>, particularly event cameras (dynamic vision sensors) that emit pixel-level events only when luminance changes. Pairing an event-based camera with an event-driven cell stack means the entire pipeline — from photon to world model update — is sparse and change-driven. There are no frames, no fixed-rate processing, just surprise propagating from sensor to model.</p>
+<p>This could be a significant efficiency advantage for robotics and embodied agents, where the sensory stream is high-bandwidth but mostly redundant (a static scene produces no events). The architecture processes only what changes, at the rate it changes.</p>
+<h3>12.5 Implications for the Quiet Mechanism</h3>
+<p>Event-driven operation interacts with the M-cell quiet mechanism (Section 10.4) in an interesting way. In the synchronous model, a quiet M-cell actively produces a "silence" output every tick. In the event-driven model, a quiet M-cell simply produces no events — it is indistinguishable from a cell with nothing to say. Action becomes a true event: the M-cell fires only when it has decided to do something, and the rest of the system can distinguish "deliberately quiet" from "nothing has changed" by whether the parent cell's prediction of the M-cell's state has changed.</p>
+<h3>12.6 Open Questions</h3>
+<ul>
+<li><strong>Threshold selection</strong>: fixed, learned, or adaptive? Per-cell or global?</li>
+<li><strong>Guaranteed liveness</strong>: how to prevent the system from going completely silent (all cells idle, no events, no learning)?</li>
+<li><strong>Training in event mode</strong>: can the system be trained event-driven from the start, or must it first be trained synchronously and then transitioned?</li>
+<li><strong>Event batching</strong>: for hardware efficiency, sparse events may need to be batched into micro-ticks. How does this interact with the timing model?</li>
+<li><strong>Hybrid mode</strong>: some cells (e.g., high-level reasoning) might always tick on a clock, while lower cells operate event-driven. The slot interface supports this naturally.</li>
+</ul>
+<hr />
+<h2>13. Goals, Valence, Adaptation, and Simulation</h2>
+<p>The preceding sections describe a system that predicts well. This section addresses the question of what the system <em>wants</em> — where goals come from, how they drive behavior, how the system adapts to changing circumstances, and how it might plan. This is the most speculative part of the architecture, and the most important.</p>
+<h3>13.1 The Goal Problem</h3>
+<p>A system that minimizes prediction error at every level is, by default, a model of the world — not an agent in it. It will learn to predict what happens, but it has no reason to prefer one outcome over another, and no reason to act. Something must supply a notion of <em>what states are desirable</em>, and that notion must cascade downward through predictions and actions to influence behavior.</p>
+<h3>13.2 Valence as Persistent Top-Level Prediction</h3>
+<p>The proposed mechanism is <strong>valence</strong>: a multi-dimensional signal encoding the desirability of the system's current state. The top cell (or cells) maintain a persistent prediction that the system is in a high-valence state. This is not a prediction <em>about</em> the world in the same way lower cells predict sensory states — it is closer to a prior, a commitment, an insistence. The system <em>expects</em> to be doing well.</p>
+<p>This creates an asymmetry in how prediction error minimization works at different levels of the stack:</p>
+<ul>
+<li><strong>Lower cells</strong>: predictions chase reality. Error is minimized by updating predictions to match what is actually perceived. The system learns an accurate world model.</li>
+<li><strong>Top cells</strong>: reality chases predictions. Error is minimized by taking actions that change the world (or the system's relation to it) to match the predicted high-valence state. The system pursues goals.</li>
+</ul>
+<p>The same prediction-error mechanism operates at every level. The difference is whether the cell's path to error reduction runs through updated predictions (modeling) or through M-cells that change the world (acting). This is consistent with the predictive coding and active inference literature, where action and perception are unified under a single objective.</p>
+<h3>13.3 The Structure of Valence</h3>
+<p>Valence is almost certainly not a scalar. It is a structured, multi-dimensional signal with components arising from different sources:</p>
+<p><strong>Physiological valence.</strong> The closest analog to traditional reward signals: mappings from sensory states to good/bad that reflect survival-relevant quantities. Pain, energy availability, temperature, wear and structural integrity. In a robotic system, these might be hardcoded or slowly learned. They enter the system through dedicated S-cells that sense internal state.</p>
+<p><strong>Relational/social valence.</strong> The desirability of states involving other agents: cooperation, approval, trust, social standing. This requires modeling other agents (possibly through dedicated simulation stacks; see Section 13.6) and is considerably more complex than physiological valence.</p>
+<p><strong>Epistemic valence.</strong> The intrinsic reward of predicting well. This is already implicit in the loss function — lower prediction error <em>is</em> the training objective. The question is whether it should also be surfaced as an explicit valence signal at the top level, so that the system actively seeks states where it understands the world well. This connects to curiosity and active inference: the system should value not just comfort (low error in familiar territory) but also understanding (the capacity to predict in novel territory).</p>
+<p><strong>Narrative/coherence valence.</strong> The desirability of states that maintain internal consistency — goals that persist, plans that unfold, identities that cohere. This is the most speculative component, but it addresses a real need: without some pressure toward coherence, a multi-timescale system with many competing signals may exhibit erratic or contradictory behavior. A valence signal that rewards narrative consistency — "I am the kind of agent that follows through on commitments" — could provide stabilizing structure.</p>
+<p>How these components are combined, weighted, and potentially constructed or modified by the system itself is a deep open question. A system that constructs its own valence is either very capable or very misaligned, depending on how the construction is constrained.</p>
+<h3>13.4 The Adaptation Spectrum</h3>
+<p>The system must adapt to changing circumstances at multiple timescales. The architecture supports a <strong>continuum of adaptation speeds</strong>:</p>
+<p><strong>Fixed weights</strong> (slowest). Parameters learned during an extended training phase that capture the system's general world model, sensorimotor schemas, and prediction/error functions. These change rarely or never after initial training.</p>
+<p><strong>Online weight updates</strong> (slow). Continual, low-learning-rate updates to cell parameters driven by ongoing prediction error. The system never fully stops learning, but learning rates may be modulated by surprise: high error increases learning rate, low error decreases it. This is consistent with the event-driven philosophy — learning, like computation, is proportional to surprise.</p>
+<p><strong>Low-rank adapters</strong> (medium). Each cell may maintain a fast-adapting low-rank component (analogous to LoRA) that captures recent deviations from base parameters. When errors spike (new environment, broken actuator), the adapter learns quickly. When errors settle, it decays toward identity — either consolidating what it learned into base weights or letting transient adaptations go. This provides fast online adaptation without catastrophic forgetting.</p>
+<p><strong>Data-as-weights through attention</strong> (fast). When a cell attends to entries in its working memory, those entries <em>function as</em> weights for that tick's computation — they modulate behavior through attention just as parameters modulate it through the network. Loading different long-term memories into working memory is functionally equivalent to switching parameter configurations, but it is fast, reversible, and requires no gradient computation.</p>
+<p><strong>State</strong> (fastest). The state vector changes every tick and is the most immediate form of adaptation.</p>
+<p>These mechanisms are not mutually exclusive. A cell might simultaneously have stable base weights, a slowly-adapting low-rank component, a working memory full of context-relevant long-term retrievals, and a rapidly-evolving state. Each layer of the adaptation spectrum handles a different timescale of change.</p>
+<h3>13.5 Regime Switching Through Memory</h3>
+<p>The data-as-weights mechanism provides a natural account of <strong>regime switching</strong>: the ability to rapidly reconfigure behavior for a known context.</p>
+<p>Consider learning to catch a baseball with a glove. The first time, actual weight updates are required — the system must learn how the glove changes its sensorimotor dynamics. But once learned, the "glove schema" can be stored as a constellation of long-term memory entries at various cells in the stack — precomputed key-value pairs that, when loaded into working memory, shift predictions and motor commands to match glove dynamics.</p>
+<p>Subsequently, putting on the glove (a sensory change) triggers context recognition through attention over working memory, which triggers loading of the relevant long-term memories, which reconfigures the system for glove mode. No weight update is required. Taking off the glove evicts or deprioritizes those memories, and the system returns to bare-hand mode. This is fast, reversible, and compositional — multiple schemas can be partially active simultaneously.</p>
+<h3>13.6 Parallel Stacks and Mixture of Experts</h3>
+<p>An alternative (or complementary) mechanism for regime switching is <strong>parallel stacks</strong> — multiple cell stacks operating in parallel between shared bottom cells and shared top cells, with a routing mechanism that selects which stack handles the current context.</p>
+<p>This is structurally a mixture of experts, but in the cell architecture it has a natural interpretation: different stacks are different world models or sensorimotor schemas, and routing is itself a prediction — "given the current context, which expert's predictions will be most accurate?" The expert that wins routing is the one whose predictions best match incoming errors.</p>
+<p>Memory-based regime switching and expert routing are likely complementary. Memory handles <em>continuous</em> adaptation within a single expert (adjusting to slightly different conditions). Expert routing handles <em>discrete</em> regime changes (fundamentally different tasks or environments requiring different representational structure).</p>
+<h3>13.7 Simulation Stacks</h3>
+<p>The parallel stack idea extends naturally to <strong>simulation</strong>: cell stacks that are not grounded in reality but serve as internal models for planning and counterfactual reasoning.</p>
+<p>A <strong>grounded stack</strong> terminates in real S-cells and M-cells — the system's interface with the actual world. A <strong>simulation stack</strong> branches off from a high-level cell and extends downward, but terminates in <em>virtual</em> S-cells and M-cells that are not connected to any environment. The simulation stack shares parameters (and representational spaces) with the grounded stack — it uses the same learned world model — but has its own independent state and working memory, allowing it to explore counterfactual trajectories without corrupting the grounded state.</p>
+<p>A simulation stack asks: "if I took action $X$, what would I perceive?" It runs the same prediction-error dynamics, but against its own generated predictions rather than against external reality. The result is an internally-simulated future that can be evaluated for valence.</p>
+<p><strong>Multiple simulation stacks</strong> running in parallel explore multiple possible futures simultaneously. A high-level cell that receives summaries from the simulation stacks can compare their projected valence and choose the action whose simulated future is most desirable. This is planning.</p>
+<p><strong>Dreaming</strong> may be what happens when the grounded stack goes quiet (no sensory input, no motor output) but simulation stacks continue to run — replaying, recombining, and consolidating experiences. This would naturally occur if the system uses downtime to simulate scenarios that produced high prediction error in the past, improving its world model for future encounters.</p>
+<h3>13.8 Distinguishing Reality from Simulation</h3>
+<p>If the system has both grounded and simulation stacks using the same representational spaces, it must be able to distinguish perception from imagination. The architectural distinction is clear: grounded S-cells have their state clamped to external input (their errors reflect real surprise), while virtual S-cells are driven by internal predictions (their errors reflect simulated surprise). Whether this distinction should be reinforced through explicit coordinate metadata — tagging all messages with a "grounded" vs. "simulated" provenance flag — or left for the system to learn, is an open question. The design philosophy suggests providing the tag and letting the system learn what to do with it.</p>
+<h3>13.9 Open Questions</h3>
+<ol>
+<li><strong>Valence source</strong>: how much is hardcoded, how much is learned, how much is endogenously constructed? What constraints prevent pathological valence construction?</li>
+<li><strong>Valence integration</strong>: how are physiological, relational, epistemic, and narrative valence components combined?</li>
+<li><strong>Time horizon</strong>: how does the system learn to optimize long-term valence rather than short-term? Does this emerge from working memory depth, or does it require explicit scaffolding?</li>
+<li><strong>Simulation control</strong>: what triggers the creation of a simulation stack? How many run in parallel? How are their results integrated?</li>
+<li><strong>Reality binding</strong>: should grounded vs. simulated provenance be architecturally enforced or learned?</li>
+<li><strong>Adaptation rate modulation</strong>: how are learning rates and adapter decay schedules controlled? By surprise magnitude? By a neuromodulatory signal?</li>
+<li><strong>Expert routing</strong>: how is routing decided? By prediction accuracy? By valence? By a separate routing cell?</li>
+<li><strong>Consolidation</strong>: when and how do fast adaptations (memory, adapters) get consolidated into slow parameters (base weights)?</li>
+<li><strong>Allostatic connection</strong>: is the high-valence prediction functionally equivalent to an allostatic setpoint? Can the setpoint itself change over time?</li>
+</ol>
+<hr />
+<h2>14. Readout for Practical Experiments</h2>
+<h3>14.1 The Short-Term Expedient</h3>
+<p>For initial experiments (e.g., language modeling benchmarks to verify that the architecture can learn at all), a pragmatic readout can be implemented:</p>
+<ul>
+<li>Use a standard S-cell with token embeddings as input.</li>
+<li>Attach a conventional <strong>LM head</strong> (a linear projection to vocabulary logits) to the S-cell's incoming prediction $p^t_{10}$, or to the interior cell's state $s^t_1$.</li>
+<li>Treat the system as a next-token predictor and train with cross-entropy loss on the LM head output, in addition to (or instead of) the per-edge prediction error loss.</li>
+</ul>
+<p>This is <strong>not</strong> the intended long-term architecture. It is a scaffolding for validation: can the cell stack learn useful representations? Do the predictions converge? Does working memory help?</p>
+<h3>14.2 The Long-Term Vision</h3>
+<p>In the full architecture, generation is driven by M-cells (Section 5.3). A language M-cell outputs a token distribution; a proprioceptive S-cell reads back the generated token. The system learns to speak by learning the joint prediction of action and consequence.</p>
+<p>The transition from the short-term LM-head readout to the full M-cell generation architecture is itself a research milestone.</p>
+<hr />
+<h2>Appendix A: Summary of Open Research Questions</h2>
+<ol>
+<li><strong>Training regime</strong>: local backprop, eligibility traces, gradient approximations, or hybrids?</li>
+<li><strong>Working memory eviction</strong>: learned vs. heuristic, compression strategies.</li>
+<li><strong>Long-term memory</strong>: storage format, indexing, retrieval, tier interfaces.</li>
+<li><strong>Precision structure</strong>: how much to make explicit vs. let emerge?</li>
+<li><strong>Coordinate attention</strong>: encoding schemes for time, provenance, modality.</li>
+<li><strong>Error function</strong>: simple difference, sparse, precision-weighted, or learned?</li>
+<li><strong>Prediction head architecture</strong>: MLP depth, normalization, shared vs. per-target.</li>
+<li><strong>M-cell training</strong>: how to get gradient signal to motor prediction heads.</li>
+<li><strong>Multi-rate scheduling</strong>: EMA, decay, accumulation strategies.</li>
+<li><strong>Quiet mechanism</strong>: gate vs. special token, learned timing.</li>
+<li><strong>Active perception actions</strong>: discrete vs. continuous, action space design.</li>
+<li><strong>Loss weighting</strong>: uniform across edges, level-dependent, precision-modulated?</li>
+<li><strong>Initialization and warmup</strong>: how does the system bootstrap from random states?</li>
+<li><strong>Lagged predictions</strong>: which cells predict how far ahead?</li>
+<li><strong>Event thresholds</strong>: fixed, learned, or adaptive? Per-cell or global?</li>
+<li><strong>Guaranteed liveness</strong>: preventing system-wide quiescence in event-driven mode.</li>
+<li><strong>Event-driven training</strong>: synchronous-first then transition, or event-driven from the start?</li>
+<li><strong>Event-sensor integration</strong>: interface design for event cameras and other sparse sensors.</li>
+<li><strong>Valence source and construction</strong>: hardcoded vs. learned vs. endogenous; constraints on pathological valence.</li>
+<li><strong>Simulation stacks</strong>: triggering, parallelism, result integration, and reality binding.</li>
+<li><strong>Adaptation spectrum</strong>: modulation of learning rates, adapter decay, and consolidation schedules.</li>
+<li><strong>Expert routing</strong>: routing mechanism, interaction with simulation, and compositional expertise.</li>
+<li><strong>Regime switching</strong>: memory-based vs. expert-based, interaction between the two.</li>
+<li><strong>Self-uncertainty estimation</strong>: scalar vs. diagonal vs. low-rank; auxiliary loss design; empirical variance window size.</li>
+<li><strong>QKV modulation</strong>: how uncertainty maps to attention geometry; learned vs. structured modulation.</li>
+<li><strong>Decommitment dynamics</strong>: interaction between $\beta^t$ decay, uncertainty, and attention broadening; preventing oscillation.</li>
+<li><strong>Local BPTT depth</strong>: fixed vs. adaptive unroll window per cell; interaction with eligibility traces.</li>
+</ol>
+    </div>
+</body>
+</html>

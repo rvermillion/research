@@ -4,6 +4,7 @@ from pathlib import Path
 import render
 
 projects = [
+    'cell-architecture',
     'coordinate-attention',
     'dharma',
     # 'gated-logit-attention',

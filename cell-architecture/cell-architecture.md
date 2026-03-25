@@ -86,6 +86,14 @@ $$s^{t+1}_i = s^t_i + g_i(s^t_i,\; p^t_{*i},\; e^t_{*i},\; m^t_i)$$
 
 The state update is a **residual**: the cell computes a delta from its current state, incoming predictions, incoming errors, and working memory (see Section 6 for the internal structure of $g_i$). The residual form ensures that the default behavior is persistence — a cell's state is stable unless there is reason to change it.
 
+More generally, the residual connection admits several variants:
+
+$$s^{t+1}_i = \beta^t_i \, s^t_i + g_i(\ldots) \qquad \text{(state decay)}$$
+
+$$s^{t+1}_i = \beta^t_i \, s^t_i + (1 - \beta^t_i) \, s^0_i + g_i(\ldots) \qquad \text{(decay toward ground state)}$$
+
+where $s^0_i$ is a learned **ground state** — the cell's "no information prior" — and $\beta^t_i \in (0, 1]$ controls the persistence of the previous state. The decay factor $\beta^t_i$ may be a learned constant per cell or a function of the current state (and, in particular, of the cell's self-estimated uncertainty; see Section 7.6). The pure residual form is the special case $\beta^t_i = 1$. The decay-toward-ground-state form ensures that a cell which stops receiving informative inputs forgets back to its prior rather than decaying to zero.
+
 ### 4.2 Prediction
 
 $$p^t_{ij} = h_j^{(i)}(s^t_i)$$
@@ -245,6 +253,53 @@ This connects directly to the predictive coding literature where precision weigh
 ### 7.3 Design Philosophy
 
 The approach to precision follows the architecture's general principle: **provide scaffolding that makes the desired behavior easy to learn, but don't over-constrain it.** An explicit variance diagonal gives the model a leg up. But the attention mechanism over working memory (Section 6) can learn richer notions of confidence, reliability, and noise from temporal patterns in the explicit metadata — and from patterns that go beyond what any hand-designed structure encodes.
+
+### 7.4 Self-Uncertainty Estimation
+
+Rather than relying solely on emergent precision, each cell can learn to **predict its own uncertainty** through a dedicated auxiliary head.
+
+An important subtlety: raw state variance is not the right target. A cell whose state is changing rapidly because it is coherently tracking well-predicted inputs is *confident* — that is purposeful evolution, not confusion. A cell whose state is changing rapidly because it keeps being corrected by surprising errors is *uncertain* — that is flailing. The uncertainty estimate must disentangle these two cases.
+
+The key insight is that the information needed for this disentanglement is locally available. The cell knows its own state delta $g_i(...)$, and it knows its incoming errors $e^t_{*i}$ and outgoing errors $e^t_{i*}$. The relevant signal is not "how much is my state changing" but "how much of my state change is driven by error correction." A simple proxy:
+
+$$\hat{u}^t_i \propto \|g_i(\ldots)\| \cdot (\|e^t_{*i}\| + \|e^t_{i*}\|)$$
+
+This is high when the state is changing *and* errors are large (corrective motion), and low when the state is changing but errors are small (purposeful evolution). More sophisticated formulations — a learned head trained against error-weighted state variance, or a decomposition of the state delta into predicted and corrective components — are possible, but even the simple version captures the right distinction.
+
+The uncertainty estimate (whether scalar $\hat{u}^t_i$ or a diagonal $\hat{\sigma}^t_i$) has a natural destination: it can be attached to outgoing predictions as the precision metadata described in Section 7.1, giving receiving cells a calibrated confidence signal. And it feeds directly into the state decay $\beta^t_i$ (Section 4.1) and attention modulation (Section 7.5).
+
+The *interface* is what matters for the architecture: the uncertainty estimate exists, it modulates behavior, and it is attached to outgoing messages. What goes inside the estimate — simple error-weighted norm, learned head, or something more exotic — can be swapped and refined without changing anything else.
+
+### 7.5 Uncertainty-Modulated Attention
+
+A cell's self-estimated uncertainty should modulate how it processes information. The mechanism is **query modulation**: the uncertainty signal $\hat{u}^t_i$ scales or transforms the **query projections** in the working memory attention mechanism (Section 6), altering what the cell looks for without changing the record of what it has seen.
+
+The intuition is that a cell should attend differently depending on how confident it is:
+
+- **High uncertainty** (confused, recently surprised): broaden queries over working memory, look for disambiguating context, cast a wider net across past states and incoming signals. The cell is saying: "I don't know what's going on, let me reconsider."
+- **Low uncertainty** (confident, on track): sharpen queries, reinforce the current trajectory, focus on the most relevant entries. The cell is saying: "I know what's happening, let me execute."
+
+The modulation targets queries specifically, not keys or values. The keys and values in working memory are the record of what happened — what was predicted, what errors arrived, what states were visited. Modulating them based on transient uncertainty would be rewriting history. But modulating the queries is asking a different question of the same history: "given how confused I am right now, what should I be looking for?" Keys and values are also potentially cached or shared across ticks, and per-tick modulation would complicate that. Queries are always freshly generated each tick, so modulating them costs nothing architecturally.
+
+This is analogous to the noise-level QKV modulation in the Qwen Vision model, where the externally-provided noise level modulates attention during diffusion. The key differences are that (1) the modulation signal here is **endogenous** — the cell modulates its own attention based on its own learned assessment of its own state, creating a tighter feedback loop — and (2) the modulation is **Q-only**, preserving the integrity of the stored context.
+
+K/V modulation is not ruled out — there may be cases where it is useful — but the default is Q-only.
+
+### 7.6 Decommitment Dynamics
+
+The self-uncertainty estimate, combined with the state-dependent decay $\beta^t$ (Section 4.1), enables a dynamic that has no analog in diffusion models: **decommitment**.
+
+In diffusion, the trajectory from noise to signal is monotonic. The model progressively commits to a specific output and never reverses direction; the noise schedule is external and one-way. In the Cell Architecture, uncertainty is endogenous and non-monotonic. A cell can be confident, then receive a surprising error, causing its uncertainty estimate to spike. When this happens:
+
+1. **State decay increases**: $\beta^t_i$ drops (driven by high uncertainty), and the state relaxes toward the ground state $s^0_i$. The cell releases its commitment to its current representation.
+2. **Queries broaden**: the uncertainty-modulated queries shift the cell into a more exploratory attention regime, searching working memory more widely for disambiguating context.
+3. **Predictions become less precise**: the uncertainty estimate attached to outgoing predictions rises, signaling to receiving cells that these predictions should be discounted.
+4. **The cell reinterprets**: with a more open state and broader queries, the cell can settle onto a different trajectory, one more consistent with the surprising new evidence.
+5. **Recommitment**: as the new interpretation stabilizes, errors diminish, uncertainty drops, $\beta^t_i$ rises, queries sharpen, and the cell locks onto its revised representation.
+
+This produces a cycle — **commit → surprise → decommit → broaden → reinterpret → recommit** — that can occur at any level of the stack independently. A low-level cell might decommit because of noisy sensory input while a high-level cell remains confident in its abstract model. Or a high-level cell might decommit because accumulated errors indicate its world model is wrong, while low-level cells continue tracking sensory input normally. The architecture supports hierarchical, asynchronous revision of beliefs at every level of abstraction.
+
+Crucially, a cell that is evolving its state rapidly along a well-predicted trajectory — high state variance but low error-driven uncertainty — does *not* decommit. The disentanglement of purposeful evolution from corrective flailing (Section 7.4) is what makes the decommitment dynamics stable and meaningful.
 
 ---
 
@@ -578,3 +633,7 @@ The transition from the short-term LM-head readout to the full M-cell generation
 21. **Adaptation spectrum**: modulation of learning rates, adapter decay, and consolidation schedules.
 22. **Expert routing**: routing mechanism, interaction with simulation, and compositional expertise.
 23. **Regime switching**: memory-based vs. expert-based, interaction between the two.
+24. **Self-uncertainty estimation**: scalar vs. diagonal vs. low-rank; auxiliary loss design; empirical variance window size.
+25. **QKV modulation**: how uncertainty maps to attention geometry; learned vs. structured modulation.
+26. **Decommitment dynamics**: interaction between $\beta^t$ decay, uncertainty, and attention broadening; preventing oscillation.
+27. **Local BPTT depth**: fixed vs. adaptive unroll window per cell; interaction with eligibility traces.
