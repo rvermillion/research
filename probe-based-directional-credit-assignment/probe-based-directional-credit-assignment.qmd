@@ -1,0 +1,477 @@
+---
+title: "Probe-Based Directional Credit Assignment"
+subtitle: "A Research Note"
+author:
+  - name: "Richard Vermillion"
+date: "2026-03-29"
+abstract: |
+  We propose a framework for delayed credit assignment that sits between scalar eligibility traces and full gradient transport. The central idea is to attach a small probe dictionary to each perturbable module, instantiate a batch of nearby counterfactual trajectories by selecting probe directions across modules, and use delayed modulatory signals to reinforce or suppress the sampled directions. The framework is intended for settings in which full end-to-end gradients are unavailable, undesirable, biologically implausible, too expensive, or simply not the right abstraction. Its core objects are: (1) per-module probe dictionaries, (2) an assignment matrix defining which probe each module uses in each sampled trajectory, (3) directional eligibility traces that store sampled local directions over time, and (4) a scheduler that allocates limited perturbation budget across modules and trajectories. This note is a proposal rather than a validated empirical claim. Its purpose is to articulate the framework clearly, position it relative to related ideas, and define a concrete experimental agenda.
+keywords:
+  - delayed credit assignment
+  - eligibility traces
+  - perturbation-based learning
+  - structured exploration
+  - modular learning
+  - recurrent networks
+bibliography: references.bib
+link-citations: true
+format:
+  html:
+    toc: true
+    number-sections: true
+    theme: cosmo
+    html-math-method: katex
+  pdf:
+    toc: true
+    number-sections: true
+    papersize: letter
+    geometry:
+      - margin=1in
+    colorlinks: true
+    link-citations: true
+    fig-cap-location: bottom
+    tbl-cap-location: bottom
+execute:
+  echo: false
+  warning: false
+  error: false
+---
+
+# Introduction
+
+Many learning systems face delayed credit assignment without having convenient access to full formal gradients. This includes recurrent systems, modular architectures, embodied agents, predictive-coding systems, hybrid differentiable/non-differentiable systems, and settings in which backward transport is too expensive or too structurally brittle. Existing alternatives each cover only part of this space: three-factor and eligibility-trace methods preserve locality and delayed modulation, but typically do not provide explicit parameter-space directional information; perturbation-based methods provide directional information, but are usually framed as zeroth-order optimization rather than as temporally persistent credit-assignment mechanisms [@bellec2020solution; @murray2019rflo; @saito2011statistical; @zuge2023weight; @salimans2017evolution].
+
+The gap can be stated simply:
+
+> In many settings, we want more than “this mattered,” but less than a full gradient.
+
+This note proposes a framework intended to fill that gap. The proposal is to combine local perturbative probes with delayed modulatory signals in order to form **directional eligibility traces**. These traces preserve the temporal role of eligibility mechanisms while adding coarse directional information in parameter space.
+
+The resulting view of learning is different from passive gradient reception. A learning system becomes an active experimenter: it allocates perturbation budget, instantiates nearby counterfactual trajectories, records which local directions were involved, and later consolidates the directions that proved useful under delayed evaluation.
+
+## Status
+
+This document is a **research note / proposal**. It is intended to state the framework precisely enough to be discussed, cited, critiqued, and implemented before full empirical validation and ablation studies are complete.
+
+# High-Level View
+
+The framework has five main components.
+
+1. **Probe dictionaries** express each module’s currently available local perturbation directions.
+2. The **assignment matrix** expresses the system’s experimental design across the batch.
+3. **Directional traces** store how a module was recently perturbed, not merely that it was active.
+4. A **modulatory signal** provides delayed evaluative feedback to each module.
+5. The **update rule** synthesizes the resulting weighted evidence into a parameter update.
+
+These components separate concerns that are often blurred together:
+
+- what local changes are available,
+- which of them are actually tested,
+- how recent local experiments are remembered,
+- what counts as success or failure,
+- and how limited exploration budget is allocated.
+
+That separation is one of the main points of the framework. It turns delayed credit assignment into a structured process of local experimentation rather than a monolithic optimization step.
+
+Here the batch dimension is used in a nonstandard but increasingly common way: not as a collection of unrelated training examples, but as a parallel evaluation axis over structured counterfactual branches. Each batch member represents a different sampled perturbation bundle propagated through the same shared computation, allowing nearby perturbed trajectories to be evaluated efficiently in parallel. This is what makes the framework computationally plausible: the same forward machinery can be reused while the sampled branches provide the directional contrasts needed for delayed credit assignment.
+
+# Probe Dictionaries
+
+Let module $m$ have a local probe dictionary
+
+$$
+\mathcal{D}_m = \{\delta_{m,0}, \delta_{m,1}, \dots, \delta_{m,K_m}\},
+$$
+
+where:
+
+- $\delta_{m,0}=0$ is the **null probe**,
+- $\delta_{m,k}$ for $k>0$ are non-null local perturbation directions.
+
+These directions may be low-rank parameter perturbations, structured adapter updates, or other compact module-local modifications. A LoRA-style low-rank parameterization is a natural implementation substrate because it provides inexpensive per-module directions and efficient batched recombination [@hu2021lora].
+
+The null probe matters conceptually. A module is not “outside” the framework when it receives no directional variation in a given window. Rather, it is a degenerate case of the same formalism: its assignments do not vary across the sampled batch.
+
+A probe dictionary can be interpreted as a rolling local basis of candidate update directions. Several regimes are possible:
+
+1. **Pure probes:** ephemeral random directions.
+2. **Semi-persistent probes:** directions are retained for multiple windows if they continue to look informative.
+3. **Learned subspaces:** a slowly changing local basis from which concrete probes are drawn.
+
+The framework does not require choosing the most ambitious option immediately. A semi-persistent dictionary is a natural practical starting point.
+
+# Assignment Matrix
+
+The entire batchwise perturbation design can be represented by an **assignment matrix**
+
+$$
+A = (A_{b,m})_{b=1,\dots,B}^{m=1,\dots,M},
+\qquad A_{b,m} \in \{0,\dots,K_m\}.
+$$
+
+where:
+
+- $B$ is the batch size, interpreted here as the number of sampled nearby trajectories,
+- $M$ is the number of perturbable modules,
+- $K_m$ is the number of non-null directions in the probe dictionary for module $m$,
+- $A_{b,m}$ specifies which probe direction module $m$ uses in trajectory $b$.
+
+Each row of $A$ defines one **joint perturbation bundle**, i.e. one nearby counterfactual world. Each column defines the variation seen by a particular module across the sampled batch. Trajectory $b$ uses perturbation
+
+$$
+\delta_{m,A_{b,m}}
+$$
+
+at module $m$.
+
+Thus $A$ is a $B \times M$ assignment matrix whose $m$-th column takes values in $\{0,\dots,K_m\}$, with $0$ denoting the null probe.
+
+## Why the assignment matrix matters
+
+This matrix unifies several earlier distinctions:
+
+- “Which modules are on?” becomes: which columns vary across rows.
+- “Which probe directions are being used?” becomes: which labels appear in each column.
+- “Which joint perturbation combinations are being tested?” becomes: the set of rows.
+
+The entire experimental design is therefore the assignment matrix together with the probe dictionaries from which its entries are drawn.
+
+## Counterfactual trajectories, not isolated local probes
+
+When several modules vary simultaneously, a row of $A$ does not represent an isolated probe of one module. It represents a **joint hypothesis** about how several modules should move together. A successful trajectory therefore provides evidence for a coordinated perturbation bundle, not for fully isolated module-level effects. This is important because any resulting parameter update is not justified as a standalone local move, but as one component of a bundle of changes that was actually evaluated together in the sampled trajectory.
+
+This is both a strength and a limitation:
+
+- bundled trajectories respect cross-module interactions and support coordinated updates based on perturbation bundles that were actually tested together, but
+- they reduce local identifiability unless the assignment design deliberately provides disentangling contrasts.
+
+That tradeoff is explicit in the framework rather than hidden.
+
+## Measuring Probe Diversity and Entanglement
+
+The assignment matrix supports principled reasoning about what information a batch can provide.
+
+### Per-module diversity
+
+For module $m$, define the empirical assignment distribution
+
+$$
+p_m(k) = \frac{1}{B}\sum_{b=1}^{B} \mathbf{1}[A_{b,m}=k].
+$$
+
+This gives at least two useful quantities:
+
+- **support size**: how many probe options actually appeared,
+- **entropy**: how evenly those options were represented.
+
+A constant column has support size $1$ and entropy $0$, regardless of whether the repeated value is null or non-null. Such a module contributes no within-batch directional information in that window.
+
+### Cross-module entanglement
+
+Two modules may each have high local diversity yet still be difficult to disentangle if their assignments are strongly correlated.
+
+For modules $i$ and $j$, define the empirical joint distribution
+
+$$
+p_{i,j}(k,\ell) = \frac{1}{B}\sum_{b=1}^{B} \mathbf{1}[A_{b,i}=k,\; A_{b,j}=\ell].
+$$
+
+Then mutual information
+
+$$
+I(i;j) = \sum_{k,\ell} p_{i,j}(k,\ell)
+\log \frac{p_{i,j}(k,\ell)}{p_i(k)p_j(\ell)}
+$$
+
+measures **assignment entanglement**: how much knowing one module’s probe choice reduces uncertainty about another’s.
+
+## Design interpretation
+
+The assignment matrix therefore carries at least three kinds of information:
+
+1. **coverage**: how many probe options participated,
+2. **balance**: how evenly those options were allocated across the batch,
+3. **entanglement**: how strongly assignments are bundled across modules.
+
+This turns probing into a design-of-experiments problem rather than an ad hoc perturbation scheme.
+
+# Directional Eligibility Traces
+
+Suppose each sampled trajectory induces local performance differentials that can be summarized for each module over a probing window. For module $m$, let $\ell_{m,b,t}$ denote a local probe-effect summary for trajectory $b$ at time or window index $t$.
+
+The exact form of $\ell_{m,b,t}$ is architecture-dependent. It may be based on local prediction error, local loss differential, local surprise reduction, or another signal intended to summarize how that branch’s perturbation affected the module’s local behavior.
+
+We then define the directional trace for module $m$ at time $t$ as
+
+$$
+e_{m,t} = \frac{1}{B}\sum_{b=1}^{B} \ell_{m,b,t}\, \delta_{m,A_{b,m}}.
+$$
+
+This is the core object. It stores not just that the module mattered, but a weighted summary of which recently sampled local directions were implicated.
+
+Over multiple windows, a module maintains a history of such traces,
+
+$$
+e_{m,t}, e_{m,t-1}, \dots, e_{m,t-P+1},
+$$
+
+which together form its **directional eligibility trace history**.
+
+# Delayed Modulatory Credit Assignment
+
+In the minimal formulation, module $m$ receives a scalar modulatory signal
+
+$$
+\mu_{m,t} \in \mathbb{R}
+$$
+
+at time $t$. This is the simplest coherent baseline: the architecture may internally route, attenuate, precision-weight, and combine many structured error or reward sources, but the base update rule consumes a single local scalar per module.
+
+The update rule is
+
+$$
+\Delta \theta_m = -\alpha \sum_{j=0}^{P-1} \lambda^j\, \mu_{m,t}\, e_{m,t-j},
+$$
+
+where:
+
+- $\alpha$ is the learning rate,
+- $\lambda \in [0,1]$ is trace decay,
+- $P$ is the trace horizon.
+
+This should be read as follows:
+
+- local probing constructs directional traces,
+- delayed/global learning signals decide whether those traces should be reinforced or suppressed,
+- the resulting update lies in the span of recently probed directions.
+
+## Why scalar modulation may be enough
+
+At first glance, a scalar modulatory signal can appear too weak. But the effective update is constructed across the batch as a weighted combination of distinct probe directions. The richness of the update therefore comes from the joint structure of:
+
+- the sampled directions $\delta_{m,A_{b,m}}$,
+- the local probe-effect summaries $\ell_{m,b,t}$,
+- and the branchwise pattern of modulation that survives into $e_{m,t}$ and the final update.
+
+The modulator itself does not need to encode direction internally if the direction is already supplied by the perturbation ensemble.
+
+## Designed routing first, learned routing later
+
+A longer-term extension is to learn how structured spatiotemporal error information should be routed and projected into the scalar $\mu_{m,t}$ seen by each module. But the right place to start is with a designed projection based on architectural heuristics such as topology, precision weighting, temporal decay, and distance from recent error sources. That isolates the core question of whether directional traces help at all before introducing a second difficult bootstrapping problem.
+
+# Resource Allocation as a First-Class Problem
+
+Once learning is treated as active experimentation, resource allocation becomes central rather than incidental.
+
+The system cannot:
+
+- vary every module equally at every step,
+- maintain arbitrarily many useful probe directions everywhere,
+- instantiate all possible joint perturbation bundles,
+- or spend the batch budget uniformly if only some parts of the system are worth exploring.
+
+There are therefore at least three distinct budgets:
+
+1. **module budget**: which modules should receive variation,
+2. **local basis budget**: how many and what kinds of directions each module should maintain,
+3. **trajectory budget**: which combinations of local directions should be allocated space in the finite batch.
+
+The framework’s components work together to allocate these budgets. Probe dictionaries manage local exploratory capacity. The assignment matrix expresses the current experiment. Modulatory signals and traces determine which experiments paid off. Updates consolidate the returns. This is one of the main reasons the framework feels more like a laboratory than a passive optimizer.
+
+# ProbedLinear: A Concrete Implementation Primitive
+
+To make the framework implementable, it is useful to introduce a reusable module-level primitive such as **ProbedLinear**.
+
+A `ProbedLinear` module contains:
+
+- a shared base weight matrix $W$,
+- a probe dictionary $\{\delta_0,\delta_1,\dots,\delta_K\}$,
+- a mechanism for selecting one probe per batch member,
+- a mechanism for collapsing credited probe directions back into an update on the shared weight.
+
+A natural implementation is LoRA-like. For example, a probe direction may be represented by low-rank factors for a linear projection:
+
+$$
+\Delta W_k = U_k V_k^\top,
+$$
+
+so that batch member $b$ uses
+
+$$
+W + \Delta W_{A_b}
+$$
+
+or equivalently computes a shared base projection plus a probe-specific correction [@hu2021lora]. Low-rank perturbation schemes are also attractive because related zeroth-order methods have shown that low-rank perturbations can dramatically reduce the cost of population-based exploration at scale [@sarkar2025eggroll].
+
+In practice, the efficient implementation is to:
+
+1. compute the shared full-rank path once,
+2. compute batched low-rank corrections in parallel,
+3. add them according to the batch assignments.
+
+This primitive can be dropped into MLPs, attention projections, recurrent transitions, and other linear-heavy components.
+
+## Why this implementation matters
+
+`ProbedLinear` turns the framework from a training rule on paper into reusable infrastructure.
+
+- probe directions become explicit module-local objects,
+- the batch dimension naturally instantiates nearby trajectories,
+- replacing stale probes becomes easy,
+- updates to the base weight are naturally expressed as linear combinations of credited probe directions.
+
+# Scheduler: The Global Perturbation Policy
+
+The final major object is the **scheduler**, which chooses the assignment matrix over time.
+
+The scheduler determines how limited perturbation budget is allocated across modules, directions, and trajectories.
+
+## Inputs to the scheduler
+
+A scheduler may use signals such as:
+
+- recent per-module trace magnitudes,
+- per-module uncertainty or surprise,
+- per-module assignment entropy,
+- pairwise or global assignment entanglement statistics,
+- recency or staleness of probe directions,
+- topological proximity to recent error sources,
+- architecture-specific salience signals.
+
+## Outputs of the scheduler
+
+At each window, the scheduler emits an assignment matrix $A_t$, i.e. a set of sampled perturbation bundles.
+
+This implicitly chooses:
+
+- which modules receive variation,
+- how much variation each receives,
+- whether the batch emphasizes disentangled local evidence or coherent joint hypotheses,
+- how much null probing versus non-null probing to include.
+
+## High-level scheduler goals
+
+A useful scheduler likely trades off at least four objectives:
+
+1. **information value**: probe where the system expects to learn something,
+2. **learning value**: probe where the system expects actual improvement,
+3. **coverage**: ensure modules and directions do not go stale,
+4. **controllability**: avoid so much simultaneous variation that trajectories become uninterpretable.
+
+## Simple initial schedulers
+
+The first empirical tests should begin with simple scheduler classes:
+
+- random sampling,
+- round-robin probing across modules or blocks,
+- blockwise bundled probing,
+- uncertainty-weighted probing,
+- diversity-seeking sampling with entanglement penalties.
+
+More adaptive global scheduling can come later.
+
+# Relationship to Prior Work
+
+This proposal sits at the intersection of four nearby literatures.
+
+## Eligibility traces and three-factor rules
+
+The closest conceptual ancestor is the family of local-learning rules built around eligibility traces and delayed modulatory signals. In spiking and recurrent settings, e-prop shows that eligibility traces can preserve temporal locality while allowing later learning signals to shape updates [@bellec2019eprop; @bellec2020solution]. Related biologically motivated approaches such as RFLO likewise keep local state and delayed feedback, but they do not explicitly maintain a bank of parameter-space directions sampled as local counterfactual hypotheses [@murray2019rflo].
+
+The point of departure here is therefore not delayed modulation itself, but the proposal to make the trace *directional*: a module stores a weighted summary of recently sampled perturbation directions rather than only scalar recency or activity information.
+
+## Perturbation learning in temporally extended tasks
+
+The second neighboring literature is perturbation-based credit assignment. Saito et al. explicitly combine node perturbation with eligibility traces and analyze structural and temporal credit assignment together, making that work one of the closest prior neighbors to the present proposal [@saito2011statistical]. More recently, Züge et al. compare weight perturbation and node perturbation in temporally extended tasks and show that weight perturbation can be competitive or superior in such settings [@zuge2023weight].
+
+These works are important precedents, but they still differ in emphasis from the present framework. The proposal here is not simply to use perturbations for zeroth-order optimization, nor merely to combine perturbation with scalar eligibility. Rather, it is to treat sampled perturbation directions as a persistent local record that can later be reinforced or suppressed by delayed modulatory signals. In that sense, the intended abstraction is a *directional eligibility trace*, not just perturbation-based learning with a temporal baseline.
+
+## Evolution strategies and low-rank batched perturbations
+
+A third neighboring literature is evolution strategies and related zeroth-order methods. Classic ES already shows how parameter-space perturbations can scale through batched parallel evaluation [@salimans2017evolution]. EGGROLL is especially relevant for implementation because it demonstrates how low-rank batched perturbations can make large-scale ES far more practical [@sarkar2025eggroll].
+
+The present proposal borrows this implementation insight directly: low-rank probe dictionaries and batched probe evaluation are natural practical substrates for the framework. But the conceptual role of perturbations is different. In standard ES, perturbations are principally population members used to estimate an optimizer step. Here, perturbations are also part of a *credit-assignment instrument*: the assignment matrix, directional traces, and delayed modulatory signals turn batched perturbations into a structured experimental design over local hypotheses.
+
+## Forward-gradient and local-loss methods
+
+A fourth neighboring literature is forward-gradient and local-loss learning. Baydin et al. reintroduced forward gradients as an unbiased gradient estimator computed from directional derivatives without backpropagation [@baydin2022gradients]. Ren et al. then showed how forward-gradient methods can be made substantially more practical by combining them with local losses and architectural choices that reduce estimator variance [@ren2023scaling].
+
+These methods are adjacent because they also use perturbative or directional information without full reverse-mode gradient transport. The main distinction is temporal. Forward-gradient methods are still primarily about approximating immediate gradients of defined losses. The present proposal is instead aimed at delayed credit settings in which the system may need to preserve a history of sampled local directions and only later decide, via modulatory signals, which of those directions were implicated in success or failure.
+
+## Claimed delta
+
+The claim of this note is therefore intentionally narrow.
+
+It is **not** that eligibility traces are new, perturbation methods are new, low-rank batched perturbations are new, or forward-gradient ideas are new. Rather, the proposed contribution is the explicit synthesis of these ingredients into a framework whose central objects are:
+
+1. per-module **probe dictionaries**,
+2. an **assignment matrix** specifying the structured batchwise perturbation design,
+3. **directional eligibility traces** that preserve sampled local directions over time,
+4. delayed **scalar modulatory signals** that reinforce or suppress those traces,
+5. and a **scheduler** that allocates perturbation budget across modules, directions, and trajectories.
+
+Stated more compactly: the proposed delta is to extend scalar eligibility-trace thinking into a framework of **directional eligibility via structured perturbation design**.
+
+
+# Minimal Algorithmic Skeleton
+
+A minimal version of the framework can be expressed as follows.
+
+1. Attach a probe dictionary to each perturbable module.
+2. At each probing window, sample an assignment matrix $A_t$.
+3. Roll out the resulting batch of nearby trajectories.
+4. For each module, compute local probe-effect summaries $\ell_{m,b,t}$.
+5. Form directional traces $e_{m,t}$.
+6. Receive delayed/local modulatory signals $\mu_{m,t}$.
+7. Update base module parameters by decayed modulation of recent directional traces.
+8. Refresh or recycle probe directions as needed.
+9. Choose the next assignment matrix with the scheduler.
+
+# Open Questions and Experimental Agenda
+
+The framework remains underdeveloped in several important respects.
+
+1. **Best probe dictionaries:** random, recycled, structured, or learned?
+2. **Best local probe-effect summaries:** what signal should define $\ell_{m,b,t}$?
+3. **Best scheduler objectives:** should the system prioritize disentanglement, bundled hypotheses, uncertainty reduction, or immediate performance?
+4. **Best update-span management:** how should stale or redundant probe directions be replaced?
+5. **Interaction with exact gradients:** when should directional-trace updates coexist with ordinary local gradients or scalar traces?
+6. **Learned modulatory routing:** when does designed routing stop being enough?
+
+The first empirical benchmarks should be deliberately small and diagnostic. The key question is not whether the framework beats full backpropagation on every task. The first question is whether directional traces outperform nearby local alternatives in delayed-credit settings where scalar traces are too weak and full gradient transport is unavailable, undesirable, or structurally mismatched. Natural adjacent baselines include scalar eligibility-trace methods, node perturbation, weight perturbation, and local-loss or forward-gradient approaches [@bellec2020solution; @saito2011statistical; @zuge2023weight; @ren2023scaling].
+
+# Limitations
+
+This note is intentionally incomplete.
+
+- It does **not** yet provide experimental validation.
+- It does **not** yet show superiority over scalar eligibility traces or standard perturbation methods.
+- It does **not** yet provide a fully specified learned scheduler or learned modulatory router.
+- It does **not** claim that all important ingredients are individually novel.
+
+Its purpose is narrower: to articulate a coherent, implementable, and potentially general framework clearly enough that it can be tested.
+
+# Conclusion
+
+The key abstraction is simple.
+
+- modules expose local probe dictionaries,
+- a scheduler chooses an assignment matrix,
+- the batch dimension instantiates nearby counterfactual trajectories,
+- directional traces summarize the sampled local directions,
+- delayed modulatory signals reinforce or suppress those traces,
+- base parameters update in the span of recently probed directions.
+
+This reframes learning as active local experimentation under delayed evaluation rather than passive consumption of gradients. If it works, it would provide a useful middle ground: richer than scalar “this mattered” traces, cheaper or more broadly applicable than full gradient transport, and concrete enough to implement via reusable module-level primitives such as `ProbedLinear`.
+
+# Suggested Citation
+
+```bibtex
+@misc{vermillion2026probe,
+  title        = {Probe-Based Directional Credit Assignment},
+  author       = {Richard Vermillion},
+  year         = {2026},
+  note         = {Research note},
+  howpublished = {\url{<insert canonical URL or DOI here>}}
+}
+```

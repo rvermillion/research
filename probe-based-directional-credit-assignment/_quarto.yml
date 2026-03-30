@@ -1,0 +1,8 @@
+project:
+  type: default
+
+format:
+  html:
+    code-fold: false
+  pdf:
+    documentclass: scrartcl
