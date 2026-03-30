@@ -3,16 +3,16 @@ title: "Probe-Based Directional Credit Assignment"
 subtitle: "A Research Note"
 author:
   - name: "Richard Vermillion"
-date: "2026-03-29"
+date: "2026-03-30"
 abstract: |
   We propose a framework for delayed credit assignment that sits between scalar eligibility traces and full gradient transport. The central idea is to attach a small probe dictionary to each perturbable module, instantiate a batch of nearby counterfactual trajectories by selecting probe directions across modules, and use delayed modulatory signals to reinforce or suppress the sampled directions. The framework is intended for settings in which full end-to-end gradients are unavailable, undesirable, biologically implausible, too expensive, or simply not the right abstraction. Its core objects are: (1) per-module probe dictionaries, (2) an assignment matrix defining which probe each module uses in each sampled trajectory, (3) directional eligibility traces that store sampled local directions over time, and (4) a scheduler that allocates limited perturbation budget across modules and trajectories. This note is a proposal rather than a validated empirical claim. Its purpose is to articulate the framework clearly, position it relative to related ideas, and define a concrete experimental agenda.
 keywords:
   - delayed credit assignment
   - eligibility traces
   - perturbation-based learning
-  - structured exploration
-  - modular learning
-  - recurrent networks
+  - local learning rules
+  - modular architectures
+  - weight perturbation
 bibliography: references.bib
 link-citations: true
 format:
