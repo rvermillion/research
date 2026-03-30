@@ -195,69 +195,77 @@ The assignment matrix therefore carries at least three kinds of information:
 
 This turns probing into a design-of-experiments problem rather than an ad hoc perturbation scheme.
 
-# Directional Eligibility Traces
+# Delayed Modulatory Credit Assignment
 
-Suppose each sampled trajectory induces local performance differentials that can be summarized for each module over a probing window. For module $m$, let $\ell_{m,b,t}$ denote a local probe-effect summary for trajectory $b$ at time or window index $t$.
-
-The exact form of $\ell_{m,b,t}$ is architecture-dependent. It may be based on local prediction error, local loss differential, local surprise reduction, or another signal intended to summarize how that branch’s perturbation affected the module’s local behavior.
-
-We then define the directional trace for module $m$ at time $t$ as
-
+The minimal formulation assumes that each sampled counterfactual branch carries its own delayed evaluative signal for each module. For module $m$, let
 $$
-e_{m,t} = \frac{1}{B}\sum_{b=1}^{B} \ell_{m,b,t}\, \delta_{m,A_{b,m}}.
+\mu_{m,b,t} \in \mathbb{R}
 $$
+denote the modulatory signal assigned at time or window index $t$ to branch $b$. Although each $\mu_{m,b,t}$ is scalar, the collection
+$$
+(\mu_{m,1,t}, \dots, \mu_{m,B,t})
+$$
+forms a branch-indexed pattern of evaluative feedback over the sampled perturbation ensemble.
 
-This is the core object. It stores not just that the module mattered, but a weighted summary of which recently sampled local directions were implicated.
+This is the key point: the directional information does not have to be encoded inside the modulator itself. It arises from the fact that different counterfactual branches receive different scalar evaluations, and those evaluations are paired with different sampled perturbation directions.
+
+We therefore define the directional trace for module $m$ at time $t$ directly as
+$$
+e_{m,t} = \frac{1}{B}\sum_{b=1}^{B} \mu_{m,b,t}\,\delta_{m,A_{b,m}}.
+$$
+This is the core object. It records a weighted combination of the local directions that were actually sampled, with branchwise weights determined by delayed or globally modulated evaluative signals.
 
 Over multiple windows, a module maintains a history of such traces,
-
 $$
 e_{m,t}, e_{m,t-1}, \dots, e_{m,t-P+1},
 $$
+which together form its directional eligibility trace history.
 
-which together form its **directional eligibility trace history**.
-
-# Delayed Modulatory Credit Assignment
-
-In the minimal formulation, module $m$ receives a scalar modulatory signal
-
+The parameter update is then
 $$
-\mu_{m,t} \in \mathbb{R}
+\Delta \theta_m = -\alpha \sum_{j=0}^{P-1} \lambda^j e_{m,t-j},
 $$
-
-at time $t$. This is the simplest coherent baseline: the architecture may internally route, attenuate, precision-weight, and combine many structured error or reward sources, but the base update rule consumes a single local scalar per module.
-
-The update rule is
-
-$$
-\Delta \theta_m = -\alpha \sum_{j=0}^{P-1} \lambda^j\, \mu_{m,t}\, e_{m,t-j},
-$$
-
 where:
-
 - $\alpha$ is the learning rate,
 - $\lambda \in [0,1]$ is trace decay,
 - $P$ is the trace horizon.
 
 This should be read as follows:
 
-- local probing constructs directional traces,
-- delayed/global learning signals decide whether those traces should be reinforced or suppressed,
-- the resulting update lies in the span of recently probed directions.
+- the sampled perturbation ensemble provides a local basis of candidate directions,
+- branch-specific delayed evaluative signals determine which sampled branches were better or worse,
+- the resulting update lies in the span of directions that were actually probed.
 
-## Why scalar modulation may be enough
+## Why “scalar” modulation may still be enough
 
-At first glance, a scalar modulatory signal can appear too weak. But the effective update is constructed across the batch as a weighted combination of distinct probe directions. The richness of the update therefore comes from the joint structure of:
+At first glance, a scalar modulatory signal can appear too weak. But this is misleading. The framework does not rely on a single scalar per module in isolation. It relies on a pattern of scalar signals across branches, each paired with a distinct sampled perturbation direction.
 
+For module $m$, the effective update is built from the joint structure of:
 - the sampled directions $\delta_{m,A_{b,m}}$,
-- the local probe-effect summaries $\ell_{m,b,t}$,
-- and the branchwise pattern of modulation that survives into $e_{m,t}$ and the final update.
+- the branchwise modulatory coefficients $\mu_{m,b,t}$,
+- and the temporal accumulation of those weighted directional traces.
 
-The modulator itself does not need to encode direction internally if the direction is already supplied by the perturbation ensemble.
+The modulator therefore does not need to encode direction internally if the directional basis is already supplied by the perturbation ensemble. A batch of branch-specific scalars distributed over distinct probe directions is already rich enough to synthesize a structured update in parameter space.
+
+There is a second sense in which the “scalar” description can be misleading. Even if each branch contributes only a scalar coefficient at the point where it weights a sampled direction, that scalar may itself be produced by a much richer routing process. A module may receive a structured vector of task-level, graph-level, or temporally extended error information and project that richer signal down to a branch-specific scalar value for a module. The final modulation is scalar only at the last step of the local update rule, not necessarily in its upstream computation.
 
 ## Designed routing first, learned routing later
 
-A longer-term extension is to learn how structured spatiotemporal error information should be routed and projected into the scalar $\mu_{m,t}$ seen by each module. But the right place to start is with a designed projection based on architectural heuristics such as topology, precision weighting, temporal decay, and distance from recent error sources. That isolates the core question of whether directional traces help at all before introducing a second difficult bootstrapping problem.
+A longer-term extension is to learn how structured spatiotemporal error information should be routed and projected into the branch-specific modulatory coefficients $\mu_{m,b,t}$ seen by each module. But the right place to start is with a designed projection based on architectural heuristics such as topology, precision weighting, temporal decay, and distance from recent error sources. That isolates the core question of whether branchwise directional traces help at all before introducing a second difficult bootstrapping problem.
+
+## Optional extension: local amplification or participation factors
+
+Some architectures may benefit from an additional local factor
+$$
+\ell_{m,b,t} \in \mathbb{R},
+$$
+used to amplify or attenuate the contribution of a sampled branch before it is added to the directional trace. In that case one may write
+$$
+e_{m,t} = \frac{1}{B}\sum_{b=1}^{B} \mu_{m,b,t}\,\ell_{m,b,t}\,\delta_{m,A_{b,m}}.
+$$
+Here $\ell_{m,b,t}$ is not the primary source of directional credit. That role is already played by the branchwise modulatory pattern $\mu_{m,b,t}$. Instead, $\ell_{m,b,t}$ serves as an optional local gain term, capturing factors such as activation magnitude, module participation, local sensitivity, or other architecture-specific notions of how strongly module $m$ was engaged in branch $b$ at time $t$.
+
+This extension may be useful when one wants the global or delayed evaluative signal to be further filtered by local information about how much the module actually participated in the branch’s behavior. But it is not required for the minimal framework.
 
 # Resource Allocation as a First-Class Problem
 
@@ -305,7 +313,7 @@ or equivalently computes a shared base projection plus a probe-specific correcti
 
 In practice, the efficient implementation is to:
 
-1. compute the shared full-rank path once,
+1. compute the shared full-rank path once using a batched `matmul`,
 2. compute batched low-rank corrections in parallel,
 3. add them according to the batch assignments.
 
@@ -417,15 +425,61 @@ Stated more compactly: the proposed delta is to extend scalar eligibility-trace 
 
 A minimal version of the framework can be expressed as follows.
 
-1. Attach a probe dictionary to each perturbable module.
-2. At each probing window, sample an assignment matrix $A_t$.
-3. Roll out the resulting batch of nearby trajectories.
-4. For each module, compute local probe-effect summaries $\ell_{m,b,t}$.
-5. Form directional traces $e_{m,t}$.
-6. Receive delayed/local modulatory signals $\mu_{m,t}$.
-7. Update base module parameters by decayed modulation of recent directional traces.
-8. Refresh or recycle probe directions as needed.
-9. Choose the next assignment matrix with the scheduler.
+1. **Attach probe dictionaries.**  
+   For each perturbable module $m$, maintain a probe dictionary
+   $$
+   \mathcal{D}_m = \{\delta_{m,0}, \delta_{m,1}, \dots, \delta_{m,K_m}\},
+   $$
+   where $\delta_{m,0}=0$ is the null probe.
+
+2. **Sample an assignment matrix.**  
+   At each probing window $t$, the scheduler emits an assignment matrix
+   $$
+   A_t = (A_{b,m})_{b=1,\dots,B}^{m=1,\dots,M},
+   \qquad A_{b,m} \in \{0,\dots,K_m\},
+   $$
+   specifying which probe direction each module uses in each sampled branch.
+
+3. **Roll out the sampled counterfactual branches in parallel.**  
+   Use the batch dimension to evaluate the resulting $B$ nearby perturbed trajectories in parallel, with branch $b$ using perturbation $\delta_{m,A_{b,m}}$ at module $m$.
+
+4. **Obtain branch-specific modulatory signals.**  
+   For each module $m$ and branch $b$, compute or route a delayed evaluative signal
+   $$
+   \mu_{m,b,t} \in \mathbb{R},
+   $$
+   representing how that sampled branch should be reinforced or suppressed at that module.
+
+5. **Form directional traces.**  
+   For each module, construct the directional trace
+   $$
+   e_{m,t} = \frac{1}{B}\sum_{b=1}^{B} \mu_{m,b,t}\,\delta_{m,A_{b,m}}.
+   $$
+
+6. **Accumulate trace history.**  
+   Maintain a recent history
+   $$
+   e_{m,t}, e_{m,t-1}, \dots, e_{m,t-P+1},
+   $$
+   with decay parameter $\lambda$.
+
+7. **Update base parameters.**  
+   Update the shared parameters of module $m$ by
+   $$
+   \Delta \theta_m = -\alpha \sum_{j=0}^{P-1} \lambda^j e_{m,t-j}.
+   $$
+
+8. **Refresh or recycle probes.**  
+   Replace stale, low-yield, or redundant probe directions as needed, while retaining useful directions when appropriate.
+
+9. **Choose the next experiment.**  
+   Use the scheduler to allocate the next perturbation budget by choosing a new assignment matrix $A_{t+1}$.
+
+An optional extension is to include a local amplification or participation factor $\ell_{m,b,t}$, yielding
+$$
+e_{m,t} = \frac{1}{B}\sum_{b=1}^{B} \mu_{m,b,t}\,\ell_{m,b,t}\,\delta_{m,A_{b,m}},
+$$
+but this is not required for the minimal formulation.
 
 # Open Questions and Experimental Agenda
 
@@ -464,14 +518,4 @@ The key abstraction is simple.
 
 This reframes learning as active local experimentation under delayed evaluation rather than passive consumption of gradients. If it works, it would provide a useful middle ground: richer than scalar “this mattered” traces, cheaper or more broadly applicable than full gradient transport, and concrete enough to implement via reusable module-level primitives such as `ProbedLinear`.
 
-# Suggested Citation
-
-```bibtex
-@misc{vermillion2026probe,
-  title        = {Probe-Based Directional Credit Assignment},
-  author       = {Richard Vermillion},
-  year         = {2026},
-  note         = {Research note},
-  howpublished = {\url{<insert canonical URL or DOI here>}}
-}
-```
+# References
