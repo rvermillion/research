@@ -68,6 +68,15 @@ Standard Transformers pay a linear memory tax as context grows. These proposals 
 
 Models need better mechanisms for learning over long horizons and adapting their own internal operators online.
 
+**Probe-Based Directional Credit Assignment** - Proposes a framework for delayed credit assignment that sits between scalar
+eligibility traces and full gradient transport. The central idea is to attach a small probe
+dictionary to each perturbable module, instantiate a batch of nearby counterfactual
+trajectories by selecting probe directions across modules, and use delayed modulatory
+signals to reinforce or suppress the sampled directions.
+| [Source](https://github.com/rvermillion/research/tree/main/probe-based-directional-credit-assignment) 
+| [Write Up](https://rvermillion.github.io/research/probe-based-directional-credit-assignment.html)
+| [Zenodo](https://doi.org/10.5281/zenodo.19332672)
+
 **RRET (Read-Refreshed Eligibility Traces)** — A hybrid BPTT/eligibility-trace approach where credit traces are updated only when memories are retrieved, aligning temporal credit assignment with semantic relevance rather than recency.
 | [Source](https://github.com/rvermillion/research/tree/main/rret) 
 | [Write Up](https://rvermillion.github.io/research/rret.html)
