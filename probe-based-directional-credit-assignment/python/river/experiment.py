@@ -43,7 +43,10 @@ class Experiment(Object):
     def _lazy_work_dir(self) -> Path:
         if parent := self.parent:
             return parent.work_dir
-        return Path('./work')
+        work_dir = Path('./work') / self.name
+        if not work_dir.exists():
+            work_dir.mkdir(parents=True)
+        return work_dir
 
     def _lazy_descriptor(self) -> str:
         desc_params = self.descriptor_params
@@ -128,6 +131,7 @@ class Experiment(Object):
 
     def start(self):
         self.metrics.clear()
+        self.header(f'Experiment[{self.descriptor}] Starting')
 
     def run_self(self):
         if self.seed is not None:
@@ -144,7 +148,7 @@ class Experiment(Object):
             work_dir = self.work_dir
             name = self.name
 
-            chart.plot_metrics(metrics, out=work_dir / f"{name}-metrics.png", smoothing=0.9)
+            chart.plot_metrics(metrics, out=work_dir / f"{self.name}-metrics.png", smoothing=0.9)
             grid = {}
             for k, v in metrics.items():
                 sep = k.index(':')
@@ -157,10 +161,10 @@ class Experiment(Object):
                     grid[exp][m] = v
                 else:
                     grid[exp] = {m: v}
-            chart.plot_grid(grid, out=work_dir / f"{name}-grid.png", smoothing=0.9)
-            ten.save_tensors(work_dir / f"{name}-metrics.safetensors", metrics)
+            chart.plot_grid(grid, out=work_dir / f"{self.name}-grid.png", smoothing=0.9)
+            ten.save_tensors(work_dir / f"{self.name}-metrics.safetensors", metrics)
 
-        self.print(f'\nFinished {self.descriptor}.')
+        self.header(f'Experiment[{self.descriptor}] Finished')
 
     @staticmethod
     def header(h: str, w: int = 120):
@@ -194,6 +198,9 @@ class CachedInputExperiment(Experiment):
         default=10,
     )]
 
+    def generate_input_chunk(self) -> Array:
+        return ten.random.normal(scale=2., shape=(self.in_chunk_size, self.in_dim))
+
     def get_input_chunk(self, i: int, name: str = 'inputs') -> Array:
         input_file = self.work_dir / f"{name}-{i}.safetensors"
         in_dim = self.in_dim
@@ -201,7 +208,7 @@ class CachedInputExperiment(Experiment):
             arrays = ten.load_tensors(input_file)
         else:
             arrays = {
-                'input': ten.random.normal(scale=2., shape=(self.in_chunk_size, in_dim))
+                'input': self.generate_input_chunk()
             }
             ten.save_tensors(input_file, arrays)
         ten.eval(arrays)
@@ -230,8 +237,8 @@ class TeacherExperiment(CachedInputExperiment):
             chunk = self.get_input_chunk(i)
             for s in range(0, chunk_size, b):
                 inputs = chunk[s:s + b]
-                outputs = teacher(inputs)
-                yield inputs, outputs
+                targets = teacher(inputs)
+                yield inputs, targets
 
     def start(self):
         super().start()
@@ -418,17 +425,20 @@ class StudentTrainingExperiment(TrainingExperiment):
     )]
 
     def _coerce_student(self, spec: Any) -> Module:
-        return self.get_module(spec)
+        return self.get_module(spec, self.work_dir / "student.safetensors")
 
 
 
 default_hyperparam_abbrevs = {
     'num_probes': 'np',
     'num_perturbations': 'P',
+    'top_k': 'tk',
     'weight_decay': 'wd',
     'lr_decay': 'lrd',
     'probe_rank': 'pr',
     'probe_scale': 'ps',
     'probe_scale_decay': 'psd',
-    'decay_every': 'decay',
+    'decay_every': 'de',
+    'generate_every': 'ge',
+    'seed': 's',
 }

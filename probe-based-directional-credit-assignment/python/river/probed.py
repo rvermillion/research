@@ -8,7 +8,7 @@ from tensile.nn.module import Functional
 from tensile.optim import Optimizer
 from tensile.util.buffer import ArrayBuffer
 
-from river.experiment import Experiment, StudentTrainingExperiment
+from river.experiment import CachedInputExperiment, Experiment, StudentTrainingExperiment
 
 
 def normalize(x: Array) -> Array:
@@ -41,7 +41,7 @@ class Probes(Object):
     def build_probe(self, assignment: Array, scales: Array = None) -> Probe:
         raise NotImplementedError()
 
-    def get_update(self, credit: Array, lr: float) -> Array:
+    def update_module(self, module: 'ProbeableModule', credit: Array, lr: float) -> None:
         raise NotImplementedError()
 
     def _repr_args(self, **options) -> str:
@@ -51,7 +51,7 @@ class Probes(Object):
 @provides(Probes, 'lora')
 class LoRAProbes(Probes):
 
-    __slots__ = ('rank', 'left', 'right')
+    __slots__ = ('rank', 'left', 'right', 'bias')
 
     rank: Annotated[int, field(
         doc="The rank of the adapters",
@@ -63,11 +63,20 @@ class LoRAProbes(Probes):
     right: Annotated[Array, field(
         doc="The right matrices"
     )]
+    bias: Annotated[Optional[Array], field(
+        doc="The bias probes if any"
+    )]
 
     # noinspection PyPep8Naming
     def build_probe(self, assignment: Array, scales: Array = None) -> Probe:
         left = self.left[assignment]
         right = self.right[assignment]
+
+        if self.bias is None:
+            bias = None
+        else:
+            bias = ten.expand_dims(self.bias[assignment], axis=1)
+
         if scales is None:
             scale = ten.ones(assignment.shape, dtype=self.dtype)
         else:
@@ -76,35 +85,62 @@ class LoRAProbes(Probes):
 
         P = left.shape[0]
 
-        ten.eval(left, right)
+        # ten.eval(left, right)
 
-        def probe(x: Array) -> Array:
-            ten.eval(x)
-            if x.ndim < 3:
-                x = ten.expand_dims(x, -2)
-                squeeze = True
-            else:
-                squeeze = False
-            assert x.shape[0] == P, f"Expected {P} perturbations, got {x.shape[0]}"
+        if bias is None:
+            def probe(x: Array) -> Array:
+                # ten.eval(x)
+                if x.ndim < 3:
+                    x = ten.expand_dims(x, -2)
+                    squeeze = True
+                else:
+                    squeeze = False
+                assert x.shape[0] == P, f"Expected {P} perturbations, got {x.shape[0]}"
 
-            p = ten.matmul(x, left)
-            y = ten.matmul(p, right)
+                p = ten.matmul(x, left)
+                y = ten.matmul(p, right)
 
-            if squeeze:
-                out = ten.squeeze(y, axis=-2)
-                out = scale[:, None] * out
-            else:
-                out = y
-                out = scale[:, None, None] * out
-            ten.eval(out)
-            return out
+                if squeeze:
+                    out = ten.squeeze(y, axis=-2)
+                    out = scale[:, None] * out
+                else:
+                    out = y
+                    out = scale[:, None, None] * out
+                # ten.eval(out)
+                return out
+        else:
+            def probe(x: Array) -> Array:
+                # ten.eval(x)
+                if x.ndim < 3:
+                    x = ten.expand_dims(x, -2)
+                    squeeze = True
+                else:
+                    squeeze = False
+                assert x.shape[0] == P, f"Expected {P} perturbations, got {x.shape[0]}"
+
+                p = ten.matmul(x, left)
+                y = ten.matmul(p, right) + bias
+
+                if squeeze:
+                    out = ten.squeeze(y, axis=-2)
+                    out = scale[:, None] * out
+                else:
+                    out = scale[:, None, None] * y
+                # ten.eval(out)
+                return out
+
 
         return probe
 
-    def get_update(self, credit: Array, lr: float) -> Array:
+    def update_module(self, module: 'ProbedLinear', credit: Array, lr: float) -> None:
         expanded = ten.matmul(self.left[1:], self.right[1:])
-        ten.eval(expanded)
-        return ten.sum(lr * expanded * credit[1:, None, None], axis=0)
+        # ten.eval(credit, expanded)
+        update = lr * ten.sum(expanded * credit[1:, None, None], axis=0)
+        module.weight += ten.swapaxes(update, 0, 1)
+        bias = self.bias
+        if bias is not None:
+            bias_update = lr * ten.sum(bias[1:] * credit[1:, None], axis=0)
+            module.bias += bias_update
 
     def _repr_args(self, **options) -> str:
         return super()._repr_args(**options) + f', rank={self.rank}'
@@ -160,55 +196,96 @@ class LoRAProbeGenerator(ProbeGenerator):
         default=1,
     )]
 
-    def generate(self, module: ProbeableModule, k: int = None) -> Probes:
+    def generate(self, module: 'ProbedLinear', k: int = None) -> Probes:
         if k is None: k = self.num_probes
         r = self.rank
         n = module.in_dim
         m = module.out_dim
 
-        j = max(r * k, r)
-        lv = ten.random.normal(shape=(1, n, j))
-        rv = ten.random.normal(shape=(1, j, m))
+        dtype = module.weight.dtype
 
-        if self.orthogonal:
-            lv = lv / ten.norm(lv, axis=1, keepdims=True)
-            rv = rv / ten.norm(rv, axis=2, keepdims=True)
+        # j = max(r * k, r)
+        # lv = ten.random.normal(shape=(1, n, j))
+        # rv = ten.random.normal(shape=(1, j, m))
+        #
+        # if self.orthogonal:
+        #     lv = lv / ten.norm(lv, axis=1, keepdims=True)
+        #     rv = rv / ten.norm(rv, axis=2, keepdims=True)
+        #
+        #     # ten.eval(lv, rv)
+        #
+        #     def reject(xh: Array, xi: Array) -> Array:
+        #         xdot = ten.sum(xi * xh)
+        #         xh = xh - xdot * xi
+        #         return normalize(xh)
+        #
+        #     for h in range(1, j):
+        #         lvh = lv[0, :, h]
+        #         rvh = rv[0, h, :]
+        #         for i in range(h):
+        #             lvi = lv[0, :, i]
+        #             rvi = rv[0, i, :]
+        #             lvh = reject(lvh, lvi)
+        #             rvh = reject(rvh, rvi)
+        #         lv[0, :, h] = lvh
+        #         rv[0, h, :] = rvh
 
-            ten.eval(lv, rv)
+        left = ten.as_type(ten.random.normal(shape=(k+1, n, r)), dtype)
+        right = ten.as_type(ten.random.normal(shape=(k+1, r, m)), dtype)
+        left = left / ten.norm(left, axis=1, keepdims=True)
+        right = right / ten.norm(right, axis=2, keepdims=True)
 
-            def reject(xh: Array, xi: Array) -> Array:
-                xdot = ten.sum(xi * xh)
-                xh = xh - xdot * xi
-                return normalize(xh)
+        left[0] = 0.
+        right[0] = 0.
 
-            for h in range(1, j):
-                lvh = lv[0, :, h]
-                rvh = rv[0, h, :]
-                for i in range(h):
-                    lvi = lv[0, :, i]
-                    rvi = rv[0, i, :]
-                    lvh = reject(lvh, lvi)
-                    rvh = reject(rvh, rvi)
-                lv[0, :, h] = lvh
-                rv[0, h, :] = rvh
+        # lefts = [ten.zeros((1, n, r))]
+        # rights = [ten.zeros((1, r, m))]
+        # lt = ten.as_type(ten.random.normal(shape=(k, n, r)), dtype)
+        # rt = ten.as_type(ten.random.normal(shape=(k, r, m)), dtype)
+        # lefts.append(lt / ten.norm(lt, axis=1, keepdims=True))
+        # rights.append(rt / ten.norm(rt, axis=2, keepdims=True))
+        # for _ in range(k):
+        #     lt = ten.random.normal(shape=(1, n, r))
+        #     rt = ten.random.normal(shape=(1, r, m))
+        #     lefts.append(lt / ten.norm(lt, axis=1, keepdims=True))
+        #     rights.append(rt / ten.norm(rt, axis=2, keepdims=True))
+        # if r > 1:
+        #     for _ in range(k):
+        #         li = ten.random.permutation(j)[:r]
+        #         ri = ten.random.permutation(j)[:r]
+        #         lt = lv[:, :, li]
+        #         rt = rv[:, ri, :]
+        #         lt = normalize(lt)
+        #         rt = normalize(rt)
+        #         lefts.append(lt)
+        #         rights.append(rt)
+        # else:
+        #     for _ in range(k):
+        #         li = ten.random.permutation(j)[:r]
+        #         ri = ten.random.permutation(j)[:r]
+        #         lt = lv[:, :, li]
+        #         rt = rv[:, ri, :]
+        #         if r > 1:
+        #             lt = normalize(lt)
+        #             rt = normalize(rt)
+        #         lefts.append(lt)
+        #         rights.append(rt)
+        # left = ten.concatenate(lefts, axis=0)
+        # right = ten.concatenate(rights, axis=0)
 
-        lefts = [ten.zeros((1, n, r))]
-        rights = [ten.zeros((1, r, m))]
-        for _ in range(k):
-            li = ten.random.permutation(j)[:r]
-            ri = ten.random.permutation(j)[:r]
-            lt = lv[:, :, li]
-            rt = rv[:, ri, :]
-            lt = normalize(lt)
-            rt = normalize(rt)
-            lefts.append(lt)
-            rights.append(rt)
-        left = ten.concatenate(lefts, axis=0)
-        right = ten.concatenate(rights, axis=0)
+        # ten.eval(left, right)
 
-        ten.eval(left, right)
+        if module.bias is None:
+            bias = None
+        else:
+            bias_p = 0.7
+            bias = ten.as_type(ten.random.normal(shape=(k+1, m)), dtype)
+            bias = bias / ten.norm(bias, axis=1, keepdims=True)
+            if bias_p < 1.0:
+                bias = ten.random.bernoulli(bias_p, shape=(k+1, m)) * bias
+            bias[0] = 0.
 
-        probes = Probes.coerce(k=k, in_dim=n, out_dim=m, rank=r, left=left, right=right, kind='lora')
+        probes = Probes.coerce(k=k, in_dim=n, out_dim=m, rank=r, left=left, right=right, bias=bias, kind='lora')
 
         return probes
 
@@ -217,6 +294,15 @@ class LoRAProbeGenerator(ProbeGenerator):
 class ProbedLinear(Linear, ProbeableModule):
 
     __slots__ = ('probes', 'probe')
+
+    weight: Annotated[Array, field(
+        doc="The learnable weights of the layer.",
+        parameter=False,
+    )]
+    bias: Annotated[Optional[Array], field(
+        doc="The learnable bias of the layer.",
+        parameter=False,
+    )]
 
     probes: Annotated[Probes, field(
         doc='The probes for the module'
@@ -243,9 +329,10 @@ class ProbedLinear(Linear, ProbeableModule):
         self.compile()
 
     def update_from_credit(self, credit: Array, lr: float) -> Array:
-        update = self.probes.get_update(credit, lr=lr)
-        self.weight += ten.swapaxes(update, 0, 1)
-        return update
+        self.probes.update_module(self, credit, lr=lr)
+        # update = self.probes.get_update(credit, lr=lr)
+        # self.weight += ten.swapaxes(update, 0, 1)
+        return self.weight
 
     def get_probe(self) -> Probe:
         if self.probe is None:
@@ -253,30 +340,58 @@ class ProbedLinear(Linear, ProbeableModule):
         return self.probe
 
     def build_call(self, mode: Module.Mode, **options) -> Functional:
-        if self.is_probing:
-            probe = self.get_probe()
+        if self.bias is None:
+            if self.is_probing:
+                probe = self.get_probe()
 
-            def call(x: Array) -> Array:
-                ten.eval(x)
+                def call(x: Array) -> Array:
+                    # ten.eval(x)
 
-                y = ten.matmul(x, self.weight.T)
+                    y = ten.matmul(x, self.weight.T)
 
-                ten.eval(y)
+                    # ten.eval(y)
 
-                out = y + probe(x)
+                    out = y + probe(x)
 
-                ten.eval(out)
+                    # ten.eval(out)
 
-                return out
+                    return out
+            else:
+                def call(x: Array) -> Array:
+                    # ten.eval(x)
+
+                    out = ten.matmul(x, self.weight.T)
+
+                    # ten.eval(out)
+
+                    return out
         else:
-            def call(x: Array) -> Array:
-                ten.eval(x)
+            if self.is_probing:
+                probe = self.get_probe()
 
-                out = ten.matmul(x, self.weight.T)
+                def call(x: Array) -> Array:
+                    # ten.eval(x)
 
-                ten.eval(out)
+                    y = ten.matmul(x, self.weight.T) + self.bias
 
-                return out
+                    # ten.eval(y)
+
+                    out = y + probe(x)
+
+                    # ten.eval(out)
+
+                    return out
+            else:
+                def call(x: Array) -> Array:
+                    # ten.eval(x)
+
+                    out = ten.matmul(x, self.weight.T) + self.bias
+
+                    # ten.eval(out)
+
+                    return out
+
+
 
         return call
 
@@ -294,9 +409,9 @@ class PerturbationMatrix(Object):
         doc="The scales for the current probes"
     )]
 
-    def postinit(self, spec: Spec):
-        super().postinit(spec)
-        ten.eval(self.probes, self.scales)
+    # def postinit(self, spec: Spec):
+    #     super().postinit(spec)
+    #     ten.eval(self.probes, self.scales)
 
     @property
     def num_perturbations(self) -> int:
@@ -306,10 +421,14 @@ class PerturbationMatrix(Object):
     def num_modules(self) -> int:
         return self.probes.shape[0]
 
+    def _repr_args(self, **options) -> str:
+        return f"{self.num_modules} x {self.num_perturbations}"
+
 
 class PerturbationScheduler(Object):
 
-    __slots__ = ('modules', 'perturbations', 'history', 'keep', 'kept', 'force_null_perturbation')
+    __slots__ = ('modules', 'perturbations', 'history', 'keep', 'kept', 'force_null_perturbation',
+                 'schedule_count')
 
     modules: Annotated[list[ProbeableModule], field(
         doc="The probable modules to be scheduled",
@@ -331,6 +450,10 @@ class PerturbationScheduler(Object):
     force_null_perturbation: Annotated[bool, field(
         doc="Whether to force the first perturbation to have null probes assigned",
         default=True
+    )]
+    schedule_count: Annotated[int, field(
+        doc="The number of times that schedule has been called",
+        default=0,
     )]
 
     @property
@@ -357,7 +480,12 @@ class PerturbationScheduler(Object):
     def record_credit(self, m: int, credit: Array):
         pass
 
+    def schedule_called(self) -> int:
+        self.schedule_count += 1
+        return self.schedule_count
+
     def schedule(self, num_perturbations: int) -> PerturbationMatrix:
+        self.schedule_called()
         probes = []
         scales = []
         kept = self.kept
@@ -365,7 +493,7 @@ class PerturbationScheduler(Object):
             perturbations = self.perturbations
             old_probes = perturbations.probes
             old_scales = perturbations.scales
-            ten.eval(kept, old_probes, old_scales)
+            # ten.eval(kept, old_probes, old_scales)
             new_perturbations = num_perturbations - kept.shape[0]
             for m, module in enumerate(self.modules):
                 new_probes, new_scales = self.schedule_module(module, new_perturbations)
@@ -393,11 +521,19 @@ class PerturbationScheduler(Object):
 @provides(PerturbationScheduler, 'random')
 class RandomPerturbationScheduler(PerturbationScheduler):
 
-    __slots__ = ('magnitude', 'p', 'mu', 'sigma')
+    __slots__ = ('magnitude', 'magnitude_decay', 'decay_every', 'p', 'mu', 'sigma')
 
     magnitude: Annotated[float, field(
         doc="The magnitude of the probe perturbation",
         default=1.0
+    )]
+    magnitude_decay: Annotated[float, field(
+        doc="The magnitude decay rate",
+        default=1.0
+    )]
+    decay_every: Annotated[int, field(
+        doc="How often to decay the magnitude",
+        default=0
     )]
     mu: Annotated[float, field(
         doc="The mu of the scale log normal distribution",
@@ -410,6 +546,13 @@ class RandomPerturbationScheduler(PerturbationScheduler):
     p: Annotated[Optional[float], field(
         doc="The probability that the module will be perturbed in a given perturbation",
     )]
+
+    def schedule_called(self) -> int:
+        cnt = super().schedule_called()
+        if (every := self.decay_every) and cnt % every == 0:
+            self.magnitude *= self.magnitude_decay
+            print(f'Decreased exploration radius to {self.magnitude}')
+        return cnt
 
     def schedule_module(self, module: ProbeableModule, num_perturbations: int) -> tuple[Array, Array]:
         k_m = module.probes.k
@@ -427,7 +570,7 @@ class RandomPerturbationScheduler(PerturbationScheduler):
         scale_sign = (2. * ten.random.bernoulli(0.5, shape=(num_perturbations,)) - 1.0)
 
         scales = ten.where(probes == 0, 0., scales * scale_sign)
-        ten.eval(probes, scales)
+        # ten.eval(probes, scales)
         if self.force_null_perturbation:
             probes[0] = 0
             scales[0] = 0.
@@ -531,19 +674,23 @@ class SimpleRNN(CompiledModule):
         return self.input_proj.in_dim
 
     @property
+    def hidden_dim(self) -> int:
+        return self.input_proj.out_dim
+
+    @property
     def out_dim(self) -> int:
         return self.output_proj.out_dim
 
     def build_call(self, mode: Module.Mode, **options) -> Callable:
         activation = self.activation
         input_proj = self.input_proj
-        hidden_dim = input_proj.out_dim
+        hidden_dim = self.hidden_dim
         hidden_proj = self.hidden_proj
         output_proj = self.output_proj
 
         def call(x: Array) -> Array:
-            h = ten.zeros((*x.shape[:-1], hidden_dim))
-            for t in range(x.shape[-1]):
+            h = ten.zeros((*x.shape[:-2], hidden_dim))
+            for t in range(x.shape[-2]):
                 xp_t = input_proj(x[..., t, :])
                 hp_t = hidden_proj(h)
                 h = activation(xp_t + hp_t)
@@ -552,17 +699,25 @@ class SimpleRNN(CompiledModule):
         return call
 
     def _extra_structure(self) -> str:
-        return f'in_dim={self.in_dim}, out_dim={self.out_dim}'
+        return f'in_dim={self.in_dim}, hidden_dim={self.hidden_dim}, out_dim={self.out_dim}'
 
 
 
 class Creditor(Object):
 
-    __slots__ = ('lr', )
+    __slots__ = ('lr', 'lr_decay', 'decay_every')
 
     lr: Annotated[float, field(
         doc="The learning rate for credit assignment",
         default=0.05,
+    )]
+    lr_decay: Annotated[float, field(
+        doc="The learning rate decay for credit assignment",
+        default=1.00,
+    )]
+    decay_every: Annotated[float, field(
+        doc="How often to decay the learning rate for credit assignment",
+        default=1000000,
     )]
 
     def assign_credit(self, step: int, scheduler: PerturbationScheduler, losses: Array):
@@ -596,6 +751,9 @@ class TopKCreditor(Creditor):
 
         scheduler.record_advantage(advantage)
 
+        if step % self.decay_every == 0:
+            lr = self.lr = lr * self.lr_decay
+
         for m, mod in enumerate(scheduler.modules):
             if mod.is_probing:
                 credit = ten.zeros((mod.probes.k + 1,))
@@ -604,7 +762,7 @@ class TopKCreditor(Creditor):
                     p = best[k]
                     probe_credit = perturbations.scales[m, p] * advantage[p]
                     credit[i[k]] += probe_credit
-                ten.eval(credit)
+                # ten.eval(credit)
                 mod.update_from_credit(credit, lr=lr)
                 scheduler.record_credit(m, credit)
 
@@ -694,9 +852,6 @@ class ProbedTrainingExperiment(StudentTrainingExperiment):
             axis=(1, 2)
         )
 
-    def _coerce_student(self, spec: Any) -> Module:
-        return self.get_module(spec, self.work_dir / "probed.safetensors")
-
     def train(self) -> int:
 
         probe_rank = self.get_param('probe_rank')
@@ -708,6 +863,7 @@ class ProbedTrainingExperiment(StudentTrainingExperiment):
         keep = self.get_param('keep', 0)
         lr_decay = self.get_param('lr_decay')
         probe_scale_decay = self.get_param('probe_scale_decay')
+        eval_every = self.get_param('eval_every', default=2)
         decay_every = self.get_param('decay_every')
         schedule_every = self.get_param('schedule_every', default=1)
         generate_every = self.get_param('generate_every', default=100000000000)
@@ -726,12 +882,14 @@ class ProbedTrainingExperiment(StudentTrainingExperiment):
 
         scheduler = PerturbationScheduler.coerce(
             magnitude=probe_scale,
+            magnitude_decay=probe_scale_decay,
+            decay_every=decay_every,
             kind=scheduler_kind,
             modules=modules,
             keep=keep,
         )
 
-        creditor = Creditor.coerce(lr=lr, top_k=top_k, kind=creditor_kind)
+        creditor = Creditor.coerce(lr=lr, lr_decay=lr_decay, decay_every=decay_every, top_k=top_k, kind=creditor_kind)
 
         for module in modules:
             module.probes = generator.generate(module)
@@ -765,8 +923,12 @@ class ProbedTrainingExperiment(StudentTrainingExperiment):
             header(f'Student[{self.descriptor}] Epoch: {e+1:2d}')
             for inputs, targets in experiment.batch_data(self.batch_size):
                 inputs = ten.broadcast_to(inputs[None], (num_perturbations, *inputs.shape))
+                # ten.eval(inputs, targets)
                 outputs = student(inputs)
                 perturbation_losses = perturbation_loss_fn(outputs, targets[None])
+
+                if step % eval_every == 0:
+                    ten.eval(perturbation_losses)
 
                 creditor.assign_credit(step, scheduler, perturbation_losses)
 
@@ -781,7 +943,7 @@ class ProbedTrainingExperiment(StudentTrainingExperiment):
                     perturbations = scheduler.schedule(num_perturbations)
 
                 if step % report_every == 0:
-                        print(f'Student[{self.descriptor}] Step: {step:5d}  Loss: {loss:.6f} Learning Rate: {lr:.4f}')
+                        print(f'Student[{self.descriptor}] Step: {step:5d}  Loss: {loss:.6f} Learning Rate: {creditor.lr:.4f}')
 
                 step += 1
 
@@ -799,6 +961,32 @@ class ProbedTrainingExperiment(StudentTrainingExperiment):
         return step-1
 
 
+@provides(Experiment, 'tmaze')
+class TMazeExperiment(CachedInputExperiment):
+
+    __slots__ = ('delay',)
+
+    delay: Annotated[int, field(
+        doc='Delay in steps before credit is rewarded',
+        default=5,
+    )]
+
+    def generate_input_chunk(self) -> Array:
+        chunk = ten.zeros((self.in_chunk_size, self.delay, self.in_dim))
+        chunk[:, 0, 0] = 2. * ten.random.bernoulli(0.5, shape=(self.in_chunk_size,)) - 1.
+        chunk[:, 1:, 1] = ten.random.normal(scale=2., shape=(self.in_chunk_size, self.delay-1,))
+        return chunk
+
+    def batch_data(self, b: int) -> Iterable[tuple[Array, Array]]:
+        chunk_size = self.in_chunk_size
+        for i in range(self.chunks_per_epoch):
+            chunk = self.get_input_chunk(i)
+            for s in range(0, chunk_size, b):
+                inputs = chunk[s:s+b]
+                targets = inputs[..., 0, 0:1]
+                yield inputs, targets
+
+
 def moving_average(x: Array, window: int, axis: int = -1) -> Array:
     x = ten.swapaxes(x, axis, -1)
 
@@ -810,9 +998,14 @@ def moving_average(x: Array, window: int, axis: int = -1) -> Array:
 
 
 def main():
+    # return teacher_regression()
+    return simple_recurrent()
+
+
+def teacher_regression():
 
     train_sgd_student = True
-    train_adam_student = False
+    train_adam_student = True
     train_pbdca_student = True
 
     in_dim = 20
@@ -976,6 +1169,181 @@ def main():
 
     experiment.run()
 
+    return 0
+
+
+def simple_recurrent():
+
+    train_sgd_student = True
+    train_adam_student = True
+    train_pbdca_student = True
+
+    in_dim = 2
+    hidden_dim = 16
+    out_dim = 1
+    batch_size = 8
+    num_epochs = 1
+    delay = 10
+    seed = 30
+
+    arch = f'tmaze-{in_dim}x{hidden_dim}x{out_dim}'
+
+    experiment = Experiment.coerce(
+        kind='tmaze',
+        name=f'{arch}-delay-{delay}-seed-{seed}',
+        in_dim=in_dim,
+        out_dim=out_dim,
+        in_chunk_size=10240,
+        delay=delay,
+        chunks_per_epoch=20
+    )
+
+    student_kind = 'simple-rnn'
+
+    if train_sgd_student:
+
+        experiment.add_experiment(
+            kind='sgd',
+            name='sgd',
+            params={
+                'lr': 1.5e-3,
+                # 'weight_decay': 0.01,
+                'momentum': 0.9,
+            },
+            student=dict(
+                in_dim=in_dim,
+                out_dim=out_dim,
+                hidden_dim=hidden_dim,
+                kind=student_kind,
+            ),
+            num_epochs=num_epochs,
+            batch_size=batch_size
+        )
+
+    if train_adam_student:
+
+        experiment.add_experiment(
+            kind='sgd',
+            name='adam',
+            params={
+                'lr': 1.5e-3,
+                # 'weight_decay': 0.01,
+                # 'momentum': 0.9,
+            },
+            student=dict(
+                in_dim=in_dim,
+                out_dim=out_dim,
+                hidden_dim=hidden_dim,
+                kind=student_kind,
+            ),
+            num_epochs=num_epochs,
+            batch_size=batch_size
+        )
+
+    if train_pbdca_student:
+
+        def add_pbdca_experiment(manual_seed: int):
+            hyperparams = {
+                'probe_rank': 1,
+                'num_probes': 12,
+                'num_perturbations': 32,
+                'probe_scale': 0.8,
+                'probe_scale_decay': 0.8,
+                'top_k': 1,
+                'lr': 0.15,
+                'lr_decay': 0.9,
+                'decay_every': 3000,
+                # 'schedule_every': 2,
+                'generate_every': 20,
+                'seed': manual_seed,
+            }
+            hyperparam_defaults = {
+                'probe_rank': 1,
+                'lr_decay': 1.0,
+                'probe_scale_decay': 1.0,
+                'decay_every': 1000,
+                'schedule_every': 1,
+                'seed': seed,
+            }
+
+            student_args = dict(
+                in_dim=in_dim,
+                out_dim=out_dim,
+                hidden_dim=hidden_dim,
+                projection_kind='linear.probed',
+                kind=student_kind,
+            )
+
+            sweeps = [
+                # [('generate_every', 1000)],
+                # [('generate_every', 500)],
+                # [('generate_every', 100)],
+                # [('generate_every', 50)],
+                # [('generate_every', 25), ('keep', 4)],
+                # [('generate_every', 25)],
+                # [('generate_every', 25), ('schedule_every', 2)],
+                # [('generate_every', 25), ('num_probes', 12), ('num_perturbations', 32)],
+                # [('generate_every', 25), ('num_probes', 12), ('num_perturbations', 48)],
+                # [('generate_every', 25), ('num_probes', 16), ('num_perturbations', 32)],
+                # [('generate_every', 25), ('num_probes', 16), ('num_perturbations', 64)],
+
+                # [('top_k', 2), ('generate_every', 50)],
+                # [('top_k', 2), ('generate_every', 25)],
+                # [('schedule_every', 1)],
+                # [('schedule_every', 2)],
+                # [('schedule_every', 3)],
+                # [('schedule_every', 4)],
+                # [('top_k', 1), ('num_probes', 12), ('num_perturbations', 32)],
+                # [('top_k', 2), ('num_probes', 12), ('num_perturbations', 32)],
+                # [('top_k', 3), ('num_probes', 12), ('num_perturbations', 32)],
+                # [('top_k', 4), ('num_probes', 12), ('num_perturbations', 32)],
+                # [('num_probes', 12), ('num_perturbations', 48)],
+                # [('lr', 0.20)],
+                # [('lr', 0.10)],
+                # [('lr', 0.05)],
+                # [('lr', 0.02)],
+                # [('lr', 0.01)],
+                # [('lr', 0.005)],
+                # [('lr', 0.001)],
+            ]
+
+            if sweeps:
+                experiment.add_experiment(
+                    kind='sweep',
+                    name='sweep',
+                    child=dict(
+                        kind='probed',
+                        name='pbdca',
+                        params=hyperparams,
+                        param_defaults=hyperparam_defaults,
+                        student=student_args,
+                        num_epochs=num_epochs,
+                        batch_size=batch_size,
+                        seed=manual_seed,
+                    ),
+                    sweeps=sweeps,
+                )
+            else:
+                experiment.add_experiment(
+                    kind='probed',
+                    name='pbdca',
+                    params=hyperparams,
+                    param_defaults=hyperparam_defaults,
+                    student=student_args,
+                    num_epochs=num_epochs,
+                    batch_size=batch_size,
+                    seed=manual_seed,
+                )
+
+        add_pbdca_experiment(seed)
+        add_pbdca_experiment(seed+1)
+        add_pbdca_experiment(seed+2)
+        add_pbdca_experiment(seed+3)
+        # add_pbdca_experiment(seed+4)
+
+    experiment.run()
+
+    return 0
 
 
 if __name__ == '__main__':
