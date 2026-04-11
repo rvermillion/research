@@ -50,6 +50,8 @@ ALE treats learning as a repeated cycle of four things:
 
 This is not merely "optimization with a better estimator." It is a broader view in which the learner may spend compute not just on acting, but on **learning about the current update problem itself**.
 
+ALE is best understood at three levels. As a framework, it provides the governing principles: optimization as adaptive local experimentation under budget, with the optimizer’s epistemic state treated as first-class. As a metacontroller, it decides when ordinary training is adequate and when richer local experimentation is worth the cost. As a family of experimenters, it includes the concrete local update methods deployed in each regime. In this view, even standard gradient-based training can be understood as a fixed-form experimenter: it performs a single analytic local inference step, using one backward pass under a fixed compute budget. ALE does not reject that mode; it treats it as the default case and asks when it should be augmented or temporarily replaced.
+
 ---
 
 ## 3. Why this is different from standard optimizer state
@@ -521,16 +523,19 @@ If ALE expands so broadly that it covers everything, it loses bite. Its core com
 
 ---
 
-## 17. A possible hierarchy
+## 17. Three distinct levels
 
-A useful way to preserve both breadth and specificity is:
+It is worth being precise about what lives at each level of the system, since the terms are easy to blur together.
 
-- **ALE**: the umbrella meta-framework — Adaptive Local Experimentation — governing regime detection, strategy selection, and the epistemic state that connects them.
-- **SGD/Adam/Shampoo**: the default experimenters. They run when their assumptions hold. ALE's diagnostic hierarchy monitors whether those assumptions continue to hold.
-- **PBDCA**: one concrete ALE experimenter focused on probe-defined intervention subspaces and directional credit assignment. Activated when structural priors and empirical diagnostics indicate that gradient-based methods are inadequate in specific components.
-- **Future experimenters**: ALE methods with different intervention spaces, metamodels, acquisition rules, and decision rules — each suited to different regimes and failure modes.
+**The ALE framework** is the set of principles. It says that optimization can be viewed as adaptive local experimentation under a compute budget, that the optimizer's epistemic state is a first-class object, that uncertainty should govern both motion and measurement, and that triple locality constrains where, when, and how meta-reasoning occurs. The framework does not prescribe any particular implementation. It provides the vocabulary and the commitments.
 
-This keeps continuity with existing work while allowing the larger idea to breathe. The hierarchy also provides a natural narrative for early experimental results: methods that show promising early gains but degrade later may be activating in the right regime but failing to yield back to SGD when the regime shifts. The meta-framework would know when to stop.
+**The ALE metacontroller** is the operational component that decides when and where to escalate beyond the default training strategy. It implements the three-tier diagnostic hierarchy: it runs cheap continuous indicators, triggers validation probes when symptoms warrant, and interprets both through structural priors about the architecture. Its output is a decision — continue with the current strategy, or activate a specific experimenter in a specific component. The metacontroller is lightweight by design; its cost must be low relative to the training steps it governs.
+
+**ALE experimenters** are the concrete local methods deployed after escalation. Each experimenter defines an intervention space, a metamodel, and an acquisition rule suited to a particular class of training pathology. SGD with its preconditioners (Adam, Shampoo) is the default experimenter — it runs when the metacontroller judges that gradient-based updates are adequate. PBDCA is one non-default experimenter, specialized to probe-defined intervention subspaces and directional credit assignment, activated when structural priors and empirical diagnostics indicate that gradients are inadequate in specific components. Future experimenters might target other failure modes: curvature-aware local search for plateau escape, perturbation-based exploration for discrete routing, or targeted decoupling experiments for bottleneck components.
+
+The separation matters because each level has different design constraints. The framework is evaluated by whether it generates productive questions. The metacontroller is evaluated by whether its regime detection is accurate and cheap. Individual experimenters are evaluated by whether they outperform SGD in the specific regimes where the metacontroller activates them. Conflating these levels — judging the framework by one experimenter's performance, or expecting the metacontroller to be the source of learning improvement — leads to confused evaluation.
+
+This separation also provides a natural narrative for early experimental results: methods that show promising early gains but degrade later may be activating in the right regime but failing to yield back to SGD when the regime shifts. The metacontroller is precisely what would know when to stop.
 
 ---
 
