@@ -333,10 +333,78 @@ class Adapter(Object):
         return self.name
 
 
+class ControllableValue(Object):
+
+    __slots__ = ()
+
+    @property
+    def name(self) -> str:
+        return str(id(self))
+
+    def get_value(self) -> float:
+        raise NotImplementedError()
+
+    def set_value(self, value: float) -> None:
+        raise NotImplementedError()
+
+
+
 class ValueAdapter(Adapter):
 
+    __slots__ = ('value', 'max_value', 'min_value')
+
+    value: Annotated[ControllableValue, field(
+        doc="The controllable value to adapt",
+        required=True,
+    )]
+    max_value: Annotated[float, field(
+        doc="The max value",
+        default=1.0,
+    )]
+    min_value: Annotated[float, field(
+        doc="The min value",
+        default=0.01,
+    )]
+
+    @property
+    def name(self) -> str:
+        return self.value.name
+
+    def get_value(self) -> float:
+        return self.value.get_value()
+
+    def set_value(self, value: float) -> None:
+        if self.min_value <= value <= self.max_value:
+            self.value.set_value(value)
+
+
+@provides(Adapter, 'decay')
+class DecayAdapter(ValueAdapter):
+
+    __slots__ = ('decay', 'decay_every')
+
+    decay: Annotated[float, field(
+        doc="The decay rate for the value",
+        default=1.0,
+    )]
+    decay_every: Annotated[int, field(
+        doc="How often to decay the value, in steps",
+        default=1000,
+    )]
+
+    def _adapt(self, step: int) -> None:
+        if step % self.decay_every == 0:
+            ov = self.get_value()
+            nv = ov * self.decay
+            print(f'  Decayed [{self.name}]: {ov} -> {nv}')
+            self.set_value(nv)
+
+
+@provides(Adapter, 'ema-state')
+class EMAStateAdapter(ValueAdapter):
+
     __slots__ = ('state', 'threshold', 'delta_threshold', 'multplier',
-                 'max_value', 'min_value')
+                 )
 
     state: Annotated[EMAState, field(
         doc="The EMA state of the value",
@@ -350,14 +418,6 @@ class ValueAdapter(Adapter):
         doc="The threshold for loss delta to trigger adaptation",
         default=0.05,
     )]
-    max_value: Annotated[float, field(
-        doc="The max value",
-        default=1.0,
-    )]
-    min_value: Annotated[float, field(
-        doc="The min value",
-        default=0.01,
-    )]
     multplier: Annotated[float, field(
         doc="The multiplier for the exploration radius",
         default=1.1,
@@ -369,12 +429,6 @@ class ValueAdapter(Adapter):
         if isinstance(spec, str):
             return self.controller.states[spec]
         raise ValueError("Cannot coerce state to a ControllerState")
-
-    def get_value(self) -> float:
-        raise NotImplementedError()
-
-    def set_value(self, value: float) -> None:
-        raise NotImplementedError()
 
     def skip_step(self, step: int) -> bool:
         return bool(self.state.last < self.threshold)
@@ -397,7 +451,7 @@ class ValueAdapter(Adapter):
         state = self.state
         pct_delta = state.percent_delta
 
-        print(f'Adapting [{self.name}] at step {step}: delta: {pct_delta:.4f} {state.describe()}')
+        # print(f'. Adapting [{self.name}] at step {step}: delta: {pct_delta:.4f} {state.describe()}')
         if pct_delta > self.delta_threshold:
             self.increase_value()
 

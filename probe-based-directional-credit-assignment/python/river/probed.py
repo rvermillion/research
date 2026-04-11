@@ -18,7 +18,8 @@ from tensile.experiment import CachedInputExperiment, Experiment, Params, Studen
 # if ten.ten_kind == "torch":
 #     ten.set_default_device("mps")
 
-from river.ale import Adapter, ALEController, Controllable, ControllerState, Telemetry, ValueAdapter
+from river.ale import Adapter, ALEController, Controllable, ControllableValue, ControllerState, Telemetry, \
+    EMAStateAdapter
 
 
 T = TypeVar('T')
@@ -960,8 +961,8 @@ class GradientDescentExperiment(StudentTrainingExperiment):
         return s-1
 
 
-@provides(Adapter, 'learning-rate')
-class LearningRateAdapter(ValueAdapter):
+@provides(ControllableValue, 'learning-rate')
+class LearningRate(ControllableValue):
 
     __slots__ = ('creditor',)
 
@@ -981,8 +982,8 @@ class LearningRateAdapter(ValueAdapter):
         self.creditor.lr = value
 
 
-@provides(Adapter, 'exploration-radius')
-class ExplorationRadiusAdapter(ValueAdapter):
+@provides(ControllableValue, 'exploration-radius')
+class ExplorationRadius(ControllableValue):
 
     __slots__ = ('scheduler',)
 
@@ -1045,27 +1046,34 @@ class ProbeController(ALEController):
 
         self.add_adapter(Adapter.coerce(
             controller=self,
+            value=ExplorationRadius(
+                scheduler=self.scheduler,
+            ),
             state='loss',
-            scheduler=self.scheduler,
             threshold=0.1,
             delta_threshold=-0.05,
             max_value=1.0,
             min_value=0.01,
             multiplier=1.1,
-            kind='exploration-radius',
+            kind='ema-state',
         ))
 
-        # self.add_adapter(Adapter.coerce(
-        #     controller=self,
-        #     state='loss',
-        #     creditor=self.creditor,
-        #     threshold=1.5,
-        #     delta_threshold=-0.05,
-        #     max_value=1.0,
-        #     min_value=0.01,
-        #     multiplier=1.1,
-        #     kind='learning-rate',
-        # ))
+        self.add_adapter(Adapter.coerce(
+            controller=self,
+            value=LearningRate(
+                creditor=self.creditor,
+            ),
+            max_value=0.2,
+            min_value=0.01,
+            decay=0.9,
+            decay_every=3000,
+            kind='decay',
+            # state='loss',
+            # threshold=1.5,
+            # delta_threshold=-0.05,
+            # multiplier=1.1,
+            # kind='ema-state',
+        ))
 
     @property
     def num_modules(self) -> int:
