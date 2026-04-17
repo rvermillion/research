@@ -1,0 +1,46 @@
+num_branches: 32
+triggers:
+  credit: 1
+  update: 2
+  schedule: 2
+  generate: 20
+  adapt: 200
+  telemetry: 1
+probe_manager:
+  kind: lora
+  num_probes: 16
+  rank: 1
+scheduler:
+  kind: random
+  exploration_radius: 0.8
+  max_factor: 1.25
+credit_assigner:
+  kind: greedy
+update_rule:
+  step_size: 0.15
+states:
+  loss:
+    kind: ema
+    record: true
+#  best_std_advantage:
+#    kind: ema
+#    record: true
+#  best_scale:
+#    kind: ema
+#    record: true
+#  mean_scale:
+#    kind: ema
+#    record: true
+adapters:
+  exploration_radius:
+    kind: decay
+    value: scheduler.exploration_radius
+    warmup: 3000
+    decay: 0.8
+    decay_every: 3000
+  udpate_step_size:
+    kind: decay
+    value: update_rule.step_size
+    warmup: 3000
+    decay: 0.9
+    decay_every: 3000

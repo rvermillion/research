@@ -1,0 +1,52 @@
+kind: tmaze
+params: params/fixed-er.yaml
+in_dim: 2
+out_dim: 1
+in_chunk_size: 102400
+chunks_per_epoch: 2
+delay: '{delay}'
+seed: '{seed}'
+input_dir: 'inputs/{arch}-delay-{delay}-seed-{seed}'
+model_dir: 'models/{arch}-seed-{seed}'
+experiments:
+  - name: sgd
+    kind: sgd
+    optimizer_kind: sgd
+    params:
+      lr: 1.5e-3
+      momentum: 0.9
+    model:
+      kind: simple-rnn
+      in_dim: 2
+      out_dim: 1
+      hidden_dim: 16
+    num_epochs: 1
+    batch_size: 8
+  - name: adam
+    kind: sgd
+    optimizer_kind: adam
+    params:
+      lr: 1.5e-3
+    model:
+      kind: simple-rnn
+      in_dim: 2
+      out_dim: 1
+      hidden_dim: 16
+    num_epochs: 1
+    batch_size: 8
+  - name: pbdca
+    kind: sweep
+    sweeps:
+      - lr:
+          - 1.5e-3
+          - 1.5e-4
+    child:
+      model:
+        kind: simple-rnn
+        in_dim: 2
+        out_dim: 1
+        hidden_dim: 16
+        projection_kind: linear.probed
+      num_epochs: 1
+      batch_size: 8
+

@@ -1,0 +1,55 @@
+num_branches: 32
+credit_every: 1
+update_every: 1
+schedule_every: 1
+generate_every: 20
+adapt_every: 500
+states:
+  loss:
+    kind: ema
+    record: true
+  best_advantage:
+    kind: ema
+    record: false
+  best_std_advantage:
+    kind: ema
+    record: false
+probe_manager:
+  kind: lora
+  num_probes: 12
+  rank: 1
+scheduler:
+  kind: random
+  exploration_radius: 0.8
+  max_factor: 1.5
+credit_assigner:
+  kind: greedy
+  lr: 0.15
+adapters:
+  exploration_radius:
+    kind: ema-driven
+    value: scheduler.exploration_radius
+    warmup: 9000
+    state: loss
+    max_value: 1.0
+    min_value: 0.01
+    threshold: 0.1
+    expand_threshold: 0.05
+    shrink_threshold: -0.1
+    expand_factor: 1.1
+    shrink_factor: 0.8
+  learning_rate:
+    kind: decay
+#    kind: ema-driven
+    value: credit_assigner.learning_rate
+    warmup: 3000
+#    state: loss
+#    max_value: 0.20
+#    min_value: 0.01
+#    threshold: 0.1
+#    expand_threshold: 0.0
+#    shrink_threshold: -0.1
+#    expand_factor: 1.1
+#    shrink_factor: 0.9
+    decay: 0.9
+    decay_every: 3000

@@ -1,8 +1,5 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
-import time
-from pathlib import Path
 
-from collections.abc import Container
 
 from tensile.common import *
 from tensile.infra import RootObject
@@ -10,31 +7,106 @@ from tensile.nn import CompiledModule, Module, ModuleArgs
 from tensile.nn.common import Activation
 from tensile.nn.layers import Linear
 from tensile.nn.module import Functional
-from tensile.optim import Optimizer
-from tensile.util.buffer import ArrayBuffer
-from tensile.experiment import CachedInputExperiment, Experiment, Params, StudentTrainingExperiment
+from tensile.experiment import Params
+
+from river.ale import (ALEComponent, LearningAdapter, ALEController,
+                       ControllableValue, LearningState, Telemetry)
 
 #
 # if ten.ten_kind == "torch":
 #     ten.set_default_device("mps")
 
-from river.ale import Adapter, ALEController, Controllable, ControllableValue, ControllerState, Telemetry, \
-    EMAStateAdapter
 
 
 T = TypeVar('T')
 
 
-def normalize(x: Array) -> Array:
+def xnormalize(x: Array) -> Array:
     return x / ten.norm(x)
 
 
-class Probe(Protocol):
+class Credit(RootObject):
+
+    __slots__ = ('probes', 'credit', 'advantages')
+
+    probes: Annotated[Array, field(
+        doc="Probe index for each module (M, K)",
+    )]
+    credit: Annotated[Array, field(
+        doc="Credit values for each module (M, K)",
+    )]
+    advantages: Annotated[Array, field(
+        doc="The advantages for each branch (P,)",
+    )]
+
+    def __init__(self, probes: Array, credit: Array, advantages: Array):
+        self.probes = probes
+        self.credit = credit
+        self.advantages = advantages
+        assert probes.shape == credit.shape, 'Probes and credit must have the same shape'
+
+    @property
+    def num_modules(self) -> int:
+        return self.probes.shape[0]
+
+    @property
+    def num_probes(self) -> int:
+        return self.probes.shape[1]
+
+    def append(self, probes: Array, credit: Array, advantages: Array, inplace: bool = True) -> 'Credit':
+        assert probes.shape == credit.shape, 'Probes and credit must have the same shape'
+        assert probes.shape[0] == self.probes.shape[0], 'Probes and credit must have the same number of modules'
+
+        new_probes = ten.concat([self.probes, probes], axis=1)
+        new_credit = ten.concat([self.credit, credit], axis=1)
+        new_advantages = self.advantages + advantages
+        if inplace:
+            self.probes = new_probes
+            self.credit = new_credit
+            self.advantages = new_advantages
+            return self
+        return Credit(new_probes, new_credit, new_advantages)
+
+    def __add__(self, other: 'Credit') -> 'Credit':
+        return self.append(other.probes, other.credit, other.advantages, inplace=False)
+
+    def __iadd__(self, other: 'Credit') -> 'Credit':
+        return self.append(other.probes, other.credit, other.advantages, inplace=True)
+
+    def get_probes(self, m: int) -> Array:
+        return self.probes[m]
+
+    def get_credit(self, m: int) -> tuple[Array, Array]:
+        return self.probes[m], self.credit[m]
+
+    def spread_credit(self, m: int, k: int) -> Array:
+        spread = ten.zeros((k, ))
+        probes, credit = self.get_credit(m)
+        for i in range(probes.shape[0]):
+            spread[probes[i]] += credit[i]
+        return spread
+
+    def _repr_args(self, **options) -> str:
+        return f'probes={self.probes}, credit={self.credit}'
+
+    @classmethod
+    def combine(cls, creds: list['Credit']) -> 'Credit':
+        if len(creds) == 1:
+            return creds[0]
+        if creds:
+            probes = ten.concat([c.probes for c in creds], axis=1)
+            credit = ten.concat([c.credit for c in creds], axis=1)
+            advantages = ten.sum(ten.stack([c.advantages for c in creds], axis=0), axis=0)
+            return Credit(probes, credit, advantages)
+        raise ValueError("Cannot combine empty list of credits")
+
+
+class BranchFunction(Protocol):
 
     def __call__(self, x: Array) -> Array: ...
 
 
-class Probes(Object):
+class ProbeBank(Object):
 
     __slots__ = ('k', 'in_dim', 'out_dim', 'dtype')
 
@@ -52,18 +124,18 @@ class Probes(Object):
         default=ten.float32,
     )]
 
-    def build_probe(self, assignment: Array, scales: Array = None) -> Probe:
+    def build_branch_function(self, assignment: Array, scales: Array = None) -> BranchFunction:
         raise NotImplementedError()
 
-    def update_module(self, module: 'ProbeableModule', credit: Array, lr: float) -> None:
+    def update_module(self, module: 'ProbedLinear', probes: Array, coefficients: Array) -> None:
         raise NotImplementedError()
 
     def _repr_args(self, **options) -> str:
         return f'{self.in_dim} -> {self.out_dim}, k={self.k}'
 
 
-@provides(Probes, 'lora')
-class LoRAProbes(Probes):
+@provides(ProbeBank, 'lora')
+class LoRAProbeBank(ProbeBank):
 
     __slots__ = ('rank', 'left', 'right', 'bias')
 
@@ -81,8 +153,7 @@ class LoRAProbes(Probes):
         doc="The bias probes if any"
     )]
 
-    # noinspection PyPep8Naming
-    def build_probe(self, assignment: Array, scales: Array = None) -> Probe:
+    def build_branch_function(self, assignment: Array, scales: Array = None) -> BranchFunction:
         left = self.left[assignment]
         right = self.right[assignment]
 
@@ -97,19 +168,19 @@ class LoRAProbes(Probes):
             assert scales.shape == assignment.shape, "Shape mismatch"
             scale = scales
 
-        P = left.shape[0]
+        num_branches = assignment.shape[0]
 
         # ten.eval(left, right)
 
         if bias is None:
-            def probe(x: Array) -> Array:
+            def branch(x: Array) -> Array:
                 # ten.eval(x)
                 if x.ndim < 3:
                     x = ten.expand_dims(x, -2)
                     squeeze = True
                 else:
                     squeeze = False
-                assert x.shape[0] == P, f"Expected {P} perturbations, got {x.shape[0]}"
+                assert x.shape[0] == num_branches, f"Expected {num_branches} branches, got {x.shape[0]}"
 
                 p = ten.matmul(x, left)
                 y = ten.matmul(p, right)
@@ -123,14 +194,14 @@ class LoRAProbes(Probes):
                 # ten.eval(out)
                 return out
         else:
-            def probe(x: Array) -> Array:
+            def branch(x: Array) -> Array:
                 # ten.eval(x)
                 if x.ndim < 3:
                     x = ten.expand_dims(x, -2)
                     squeeze = True
                 else:
                     squeeze = False
-                assert x.shape[0] == P, f"Expected {P} perturbations, got {x.shape[0]}"
+                assert x.shape[0] == num_branches, f"Expected {num_branches} branches, got {x.shape[0]}"
 
                 p = ten.matmul(x, left)
                 y = ten.matmul(p, right) + bias
@@ -143,17 +214,31 @@ class LoRAProbes(Probes):
                 # ten.eval(out)
                 return out
 
+        return branch
 
-        return probe
+    def update_module(self, module: 'ProbedLinear', probes: Array, coefficients: Array) -> None:
 
-    def update_module(self, module: 'ProbedLinear', credit: Array, lr: float) -> None:
-        expanded = ten.matmul(self.left[1:], self.right[1:])
-        # ten.eval(credit, expanded)
-        update = lr * ten.sum(expanded * credit[1:, None, None], axis=0)
-        module.weight += ten.swapaxes(update, 0, 1)
+        # Multiply out the specified probes
+        probe_weights = ten.matmul(self.left[probes], self.right[probes])
+
+        # Multiply by the credit array (expanded to broadcast correctly) and sum
+        weight_update = ten.sum(probe_weights * coefficients[:, None, None], axis=0)
+
+        # Module weights are stored transposed, so swap axes
+        weight_update = ten.swapaxes(weight_update, 0, 1)
+
+        # Update the module weights
+        module.weight += weight_update
+
         bias = self.bias
         if bias is not None:
-            bias_update = lr * ten.sum(bias[1:] * credit[1:, None], axis=0)
+            # Get the specified bias probes
+            probe_bias = bias[probes]
+
+            # Multiply by the credit array (expanded to broadcast correctly) and sum
+            bias_update = ten.sum(probe_bias * coefficients[:, None], axis=0)
+
+            # Update the module bias
             module.bias += bias_update
 
     def _repr_args(self, **options) -> str:
@@ -165,25 +250,28 @@ class ProbeableModule(CompiledModule):
     __slots__ = ()
 
     @property
-    def is_probing(self) -> bool:
+    def dtype(self) -> DType:
         raise NotImplementedError()
 
     @property
-    def probes(self) -> Probes:
+    def probes(self) -> ProbeBank:
         raise NotImplementedError()
 
-    @probes.setter
-    def probes(self, probes: Probes) -> None:
+    # @probes.setter
+    # def probes(self, probes: ProbeBank) -> None:
+    #     raise NotImplementedError()
+
+    def update_probes(self, probes: ProbeBank) -> None:
         raise NotImplementedError()
 
-    def perturb(self, perturbations: 'Perturbations') -> None:
+    def update_assignments(self, assignments: 'ModuleAssignments') -> None:
         raise NotImplementedError()
 
-    def update_from_credit(self, credit: Array, lr: float) -> Array:
+    def update_in_directions(self, probes: Array, coefficients: Array) -> None:
         raise NotImplementedError()
 
 
-class ProbeGenerator(Controllable):
+class ProbeManager(ALEComponent):
 
     __slots__ = ('num_probes', 'orthogonal')
 
@@ -196,12 +284,17 @@ class ProbeGenerator(Controllable):
         default=False,
     )]
 
-    def generate(self, controller: 'ProbeController', m: int, module: ProbeableModule) -> Probes:
+    def generate(self, controller: 'ModuleController', keep: Array = None) -> ProbeBank:
         raise NotImplementedError()
 
+    def _repr_arg_items(self, **options) -> Iterable[Any]:
+        yield f'num_probes={self.num_probes}'
+        if self.orthogonal:
+            yield '+orthogonal'
 
-@provides(ProbeGenerator, 'lora')
-class LoRAProbeGenerator(ProbeGenerator):
+
+@provides(ProbeManager, 'lora')
+class LoRAProbeManager(ProbeManager):
 
     __slots__ = ('rank', 'bias_p')
 
@@ -214,106 +307,55 @@ class LoRAProbeGenerator(ProbeGenerator):
         default=0.7,
     )]
 
-    def generate(self, controller: 'ProbeController', m: int, module: 'ProbedLinear') -> Probes:
-        k = self.num_probes
+    def generate(self, controller: 'ModuleController', keep: Array = None) -> ProbeBank:
+        module = controller.module
+        k = controller.num_probes
         r = self.rank
         n = module.in_dim
         m = module.out_dim
 
-        dtype = module.weight.dtype
+        dtype = module.dtype
 
-        # j = max(r * k, r)
-        # lv = ten.random.normal(shape=(1, n, j))
-        # rv = ten.random.normal(shape=(1, j, m))
-        #
-        # if self.orthogonal:
-        #     lv = lv / ten.norm(lv, axis=1, keepdims=True)
-        #     rv = rv / ten.norm(rv, axis=2, keepdims=True)
-        #
-        #     # ten.eval(lv, rv)
-        #
-        #     def reject(xh: Array, xi: Array) -> Array:
-        #         xdot = ten.sum(xi * xh)
-        #         xh = xh - xdot * xi
-        #         return normalize(xh)
-        #
-        #     for h in range(1, j):
-        #         lvh = lv[0, :, h]
-        #         rvh = rv[0, h, :]
-        #         for i in range(h):
-        #             lvi = lv[0, :, i]
-        #             rvi = rv[0, i, :]
-        #             lvh = reject(lvh, lvi)
-        #             rvh = reject(rvh, rvi)
-        #         lv[0, :, h] = lvh
-        #         rv[0, h, :] = rvh
+        nk = k if keep is None else k - keep.shape[0]
 
-        left = ten.as_type(ten.random.normal(shape=(k+1, n, r)), dtype)
-        right = ten.as_type(ten.random.normal(shape=(k+1, r, m)), dtype)
+        left = ten.as_type(ten.random.normal(shape=(nk+1, n, r)), dtype)
+        right = ten.as_type(ten.random.normal(shape=(nk+1, r, m)), dtype)
         left = left / ten.norm(left, axis=1, keepdims=True)
         right = right / ten.norm(right, axis=2, keepdims=True)
 
         left[0] = 0.
         right[0] = 0.
 
-        # lefts = [ten.zeros((1, n, r))]
-        # rights = [ten.zeros((1, r, m))]
-        # lt = ten.as_type(ten.random.normal(shape=(k, n, r)), dtype)
-        # rt = ten.as_type(ten.random.normal(shape=(k, r, m)), dtype)
-        # lefts.append(lt / ten.norm(lt, axis=1, keepdims=True))
-        # rights.append(rt / ten.norm(rt, axis=2, keepdims=True))
-        # for _ in range(k):
-        #     lt = ten.random.normal(shape=(1, n, r))
-        #     rt = ten.random.normal(shape=(1, r, m))
-        #     lefts.append(lt / ten.norm(lt, axis=1, keepdims=True))
-        #     rights.append(rt / ten.norm(rt, axis=2, keepdims=True))
-        # if r > 1:
-        #     for _ in range(k):
-        #         li = ten.random.permutation(j)[:r]
-        #         ri = ten.random.permutation(j)[:r]
-        #         lt = lv[:, :, li]
-        #         rt = rv[:, ri, :]
-        #         lt = normalize(lt)
-        #         rt = normalize(rt)
-        #         lefts.append(lt)
-        #         rights.append(rt)
-        # else:
-        #     for _ in range(k):
-        #         li = ten.random.permutation(j)[:r]
-        #         ri = ten.random.permutation(j)[:r]
-        #         lt = lv[:, :, li]
-        #         rt = rv[:, ri, :]
-        #         if r > 1:
-        #             lt = normalize(lt)
-        #             rt = normalize(rt)
-        #         lefts.append(lt)
-        #         rights.append(rt)
-        # left = ten.concatenate(lefts, axis=0)
-        # right = ten.concatenate(rights, axis=0)
-
-        # ten.eval(left, right)
-
-        if module.bias is None:
-            bias = None
-        else:
+        if controller.needs_bias:
             bias_p = self.bias_p
-            bias = ten.as_type(ten.random.normal(shape=(k+1, m)), dtype)
+            bias = ten.as_type(ten.random.normal(shape=(nk+1, m)), dtype)
             bias = bias / ten.norm(bias, axis=1, keepdims=True)
             if bias_p < 1.0:
-                bias = ten.random.bernoulli(bias_p, shape=(k+1, m)) * bias
+                bias = ten.random.bernoulli(bias_p, shape=(nk+1, m)) * bias
             bias[0] = 0.
+        else:
+            bias = None
 
-        probes = Probes.coerce(k=k, in_dim=n, out_dim=m, rank=r, left=left, right=right, bias=bias, kind='lora')
+        if k != nk:
+            old_probes = module.probes
+            if isinstance(old_probes, LoRAProbeBank):
+                left = ten.concat([left, old_probes.left[keep]], axis=0)
+                right = ten.concat([right, old_probes.right[keep]], axis=0)
+                if bias is not None:
+                    bias = ten.concat([bias, old_probes.bias[keep]], axis=0)
 
-        module.probes = probes
+        return ProbeBank.coerce(k=k, in_dim=n, out_dim=m, rank=r, left=left, right=right, bias=bias, kind='lora')
 
-        return probes
+    def _repr_arg_items(self, **options) -> Iterable[Any]:
+        yield from super()._repr_arg_items(**options)
+        yield f'rank={self.rank}'
+        yield f'bias_p={self.bias_p}'
 
 
 @provides(Linear, 'probed')
 class ProbedLinear(Linear, ProbeableModule):
 
-    __slots__ = ('probes', 'probe')
+    __slots__ = ('probes', 'branch', 'null_branch')
 
     weight: Annotated[Array, field(
         doc="The learnable weights of the layer.",
@@ -323,103 +365,62 @@ class ProbedLinear(Linear, ProbeableModule):
         doc="The learnable bias of the layer.",
         parameter=False,
     )]
+    probes: Annotated[ProbeBank, field(
+        doc='The probe bank for the module'
+    )]
+    branch: Annotated[BranchFunction, field(
+        doc="The probe function for this module",
+    )]
+    null_branch: Annotated[BranchFunction, field(
+        doc="The null probe function for this module",
+    )]
 
-    probes: Annotated[Probes, field(
-        doc='The probes for the module'
-    )]
-    probe: Annotated[Optional[Probe], field(
-        doc="The probe function for this moudle",
-    )]
+    def _lazy_null_branch(self) -> BranchFunction:
+        null = ten.zeros((self.out_dim, ))
+
+        # noinspection PyUnusedLocal
+        def null_probe(x: Array) -> Array:
+            return null
+        return null_probe
 
     @property
-    def is_probing(self) -> bool:
-        return self.probe is not None
+    def dtype(self) -> DType:
+        return self.weight.dtype
 
     def init_from_args(self, args: Linear.Args):
         super().init_from_args(args)
         ten.eval(self.weight)
 
-    def perturb(self, perturbations: 'Perturbations'):
-        probes = perturbations.probes
-        # noinspection PyTypeChecker
-        if ten.all(probes == 0):
-            self.probe = None
-        else:
-            self.probe = self.probes.build_probe(probes, scales=perturbations.scales)
-        self.calls.clear()
-        self.compile()
+    def update_probes(self, probes: ProbeBank) -> None:
+        self.probes = probes
 
-    def update_from_credit(self, credit: Array, lr: float) -> Array:
-        self.probes.update_module(self, credit, lr=lr)
-        # update = self.probes.get_update(credit, lr=lr)
-        # self.weight += ten.swapaxes(update, 0, 1)
-        return self.weight
+    def update_assignments(self, assignments: 'ModuleAssignments'):
+        self.branch = self.probes.build_branch_function(assignments.probes, scales=assignments.scales)
 
-    def get_probe(self) -> Probe:
-        if self.probe is None:
-            raise ValueError("Probe function is None, cannot get probe")
-        return self.probe
+    def update_in_directions(self, probes: Array, coefficients: Array) -> None:
+        self.probes.update_module(self, probes, coefficients)
+
+    # def update_from_credit(self, m: int, credit: 'Credit') -> None:
+    #     self.probes.update_module(m, self, credit)
 
     def build_call(self, mode: Module.Mode, **options) -> Functional:
         if self.bias is None:
-            if self.is_probing:
-                probe = self.get_probe()
-
-                def call(x: Array) -> Array:
-                    # ten.eval(x)
-
-                    y = ten.matmul(x, self.weight.T)
-
-                    # ten.eval(y)
-
-                    out = y + probe(x)
-
-                    # ten.eval(out)
-
-                    return out
-            else:
-                def call(x: Array) -> Array:
-                    # ten.eval(x)
-
-                    out = ten.matmul(x, self.weight.T)
-
-                    # ten.eval(out)
-
-                    return out
+            def call(x: Array) -> Array:
+                y = ten.matmul(x, self.weight.T)
+                out = y + self.branch(x)
+                return out
         else:
-            if self.is_probing:
-                probe = self.get_probe()
-
-                def call(x: Array) -> Array:
-                    # ten.eval(x)
-
-                    y = ten.matmul(x, self.weight.T) + self.bias
-
-                    # ten.eval(y)
-
-                    out = y + probe(x)
-
-                    # ten.eval(out)
-
-                    return out
-            else:
-                def call(x: Array) -> Array:
-                    # ten.eval(x)
-
-                    out = ten.matmul(x, self.weight.T) + self.bias
-
-                    # ten.eval(out)
-
-                    return out
-
-
+            def call(x: Array) -> Array:
+                y = ten.matmul(x, self.weight.T) + self.bias
+                out = y + self.branch(x)
+                return out
 
         return call
 
     Args = Linear.Args
 
 
-class Perturbations(RootObject):
+class ProbesAndScales(RootObject):
 
     __slots__ = ('probes', 'scales')
 
@@ -437,7 +438,17 @@ class Perturbations(RootObject):
 
         assert probes.shape == scales.shape, "Probes and scales must have the same shape"
 
-    def concatenate(self, probes: Array, scales: Array, in_place: bool = True) -> 'Perturbations':
+
+class ModuleAssignment(ProbesAndScales):
+
+    __slots__ = ()
+
+
+class ModuleAssignments(ProbesAndScales):
+
+    __slots__ = ()
+
+    def concatenate(self, probes: Array, scales: Array, in_place: bool = True) -> 'ModuleAssignments':
         assert probes.shape == scales.shape, "Probes and scales must have the same shape"
 
         probes = ten.concatenate([self.probes, probes])
@@ -447,72 +458,87 @@ class Perturbations(RootObject):
             self.scales = scales
             return self
         else:
-            return Perturbations(probes, scales)
+            return ModuleAssignments(probes, scales)
 
-    def __len__(self) -> int:
+    @property
+    def num_branches(self) -> int:
         return self.probes.shape[0]
 
 
-class PerturbationMatrix(RootObject):
+class Branch(ProbesAndScales):
 
-    __slots__ = ('probes', 'scales')
-
-    probes: Annotated[Array, field(
-        doc="The current probe indexes"
-    )]
-    scales: Annotated[Array, field(
-        doc="The scales for the current probes"
-    )]
-
-    def __init__(self, probes: Array, scales: Array):
-        super().__init__()
-        self.probes = probes
-        self.scales = scales
-
-        assert probes.shape == scales.shape, "Probes and scales must have the same shape"
-
-    @property
-    def num_perturbations(self) -> int:
-        return self.probes.shape[-1]
+    __slots__ = ()
 
     @property
     def num_modules(self) -> int:
         return self.probes.shape[0]
 
-    def get_module_perturbations(self, mod: int) -> Perturbations:
+
+class BranchSchedule(ProbesAndScales):
+
+    __slots__ = ()
+
+    @property
+    def num_branches(self) -> int:
+        return self.probes.shape[1]
+
+    @property
+    def num_modules(self) -> int:
+        return self.probes.shape[0]
+
+    def get_module_assignments(self, mod: int) -> ModuleAssignments:
         assert 0 <= mod < self.num_modules, "Module index out of range"
-        return Perturbations(self.probes[mod], self.scales[mod])
+        return ModuleAssignments(self.probes[mod], self.scales[mod])
+
+    def get_branch(self, branch: int) -> Branch:
+        assert 0 <= branch < self.num_branches, "Branch index out of range"
+        return Branch(self.probes[:, branch], self.scales[:, branch])
+
+    def get_probe(self, mod: int, branch: int) -> Array:
+        return self.probes[mod, branch]
+
+    def get_scale(self, mod: int, branch: int) -> Array:
+        return self.scales[mod, branch]
+
+    def get_module_probes(self, mod: int) -> Array: # (P, )
+        return self.probes[mod]
+
+    def get_branch_probes(self, branch: int) -> Array: # (M, )
+        return self.probes[:, branch]
+
+    def get_module_scales(self, mod: int) -> Array:  # (P, )
+        return self.scales[mod]
+
+    def get_branch_scales(self, branch: int) -> Array: # (M, )
+        return self.scales[:, branch]
+
+    def get_probes_and_scales(self, index: Array) -> tuple[Array, Array]:
+        return self.probes[:, index], self.scales[:, index]
 
     def _repr_args(self, **options) -> str:
-        return f"{self.num_modules} x {self.num_perturbations}"
+        return f"{self.num_modules} x {self.num_branches}"
 
     @classmethod
-    def from_perturbations(cls, perturbations: list[Perturbations]) -> 'PerturbationMatrix':
-        probes = ten.stack([p.probes for p in perturbations], axis=0)
-        scales = ten.stack([p.scales for p in perturbations], axis=0)
+    def from_assignments(cls, branches: list[ModuleAssignments]) -> 'BranchSchedule':
+        probes = ten.stack([p.probes for p in branches], axis=0)
+        scales = ten.stack([p.scales for p in branches], axis=0)
         return cls(probes, scales)
 
 
-class PerturbationScheduler(Controllable):
+class BranchScheduler(ALEComponent):
 
-    __slots__ = ('perturbations', 'history', 'keep', 'kept', 'force_null_perturbation',
+    __slots__ = ('current', 'history', 'force_null_branch',
                  'schedule_count')
 
-    perturbations: Annotated[PerturbationMatrix, field(
-        doc="The current perturbation matrix"
+    current: Annotated[BranchSchedule, field(
+        doc="The current branch matrix"
     )]
-    history: Annotated[list[PerturbationMatrix], field(
-        doc="The history of perturbation matrices",
+    history: Annotated[list[BranchSchedule], field(
+        doc="The history of branch matrices",
         default_factory=list,
     )]
-    keep: Annotated[int, field(
-        doc="The number perturbations to keep",
-    )]
-    kept: Annotated[Optional[Array], field(
-        doc="The indexes of the perturbations to keep",
-    )]
-    force_null_perturbation: Annotated[bool, field(
-        doc="Whether to force the first perturbation to have null probes assigned",
+    force_null_branch: Annotated[bool, field(
+        doc="Whether to force the first branch to have null probes assigned",
         default=True
     )]
     schedule_count: Annotated[int, field(
@@ -520,66 +546,46 @@ class PerturbationScheduler(Controllable):
         default=0,
     )]
 
-    def perturb_modules(self, modules: list[ProbeableModule], perturbations: PerturbationMatrix = None):
-        if perturbations is None: perturbations = self.perturbations
-
-        for m, module in enumerate(modules):
-            module.perturb(perturbations.get_module_perturbations(m))
-
-    def set_perturbations(self, modules: list[ProbeableModule], perturbations: PerturbationMatrix):
-        self.perturbations = perturbations
-        self.history.append(perturbations)
-        self.perturb_modules(modules, perturbations)
-
-    def record_advantage(self, advantage: Array):
-        if self.keep > 0:
-            self.kept = ten.argsort(advantage[1:])[:self.keep] + 1
-
-    def record_credit(self, m: int, credit: Array):
-        pass
-
     def schedule_called(self) -> int:
         self.schedule_count += 1
         return self.schedule_count
 
-    def schedule(self, controller: 'ProbeController', modules: list[ProbeableModule], num_perturbations: int) -> PerturbationMatrix:
+    def schedule(self, controller: 'PALEController', num_branches: int, keep: Array = None) -> BranchSchedule:
         self.schedule_called()
-        new_perturbations = []
-        kept = self.kept
-        if kept is not None:
-            perturbations = self.perturbations
-            old_probes = perturbations.probes
-            old_scales = perturbations.scales
-            # ten.eval(kept, old_probes, old_scales)
-            num_perturbations -= kept.shape[0]
-            for m, module in enumerate(modules):
-                mod_pertubrations = self.generate_perturbations(m, module, num_perturbations)
-                mod_pertubrations.concatenate(old_probes[m, kept], old_scales[m, kept], in_place=True)
-                new_perturbations.append(mod_pertubrations)
+        new_schedules = []
+        if keep is None:
+            for m in range(controller.num_modules):
+                module_schedule = self.generate_module_assignments(controller, m, num_branches)
+                new_schedules.append(module_schedule)
         else:
-            for m, module in enumerate(modules):
-                mod_pertubrations = self.generate_perturbations(m, module, num_perturbations)
-                new_perturbations.append(mod_pertubrations)
+            schedule = self.current
+            old_probes = schedule.probes
+            old_scales = schedule.scales
+            num_branches -= keep.shape[0]
+            for m in range(controller.num_modules):
+                module_schedule = self.generate_module_assignments(controller, m, num_branches)
+                module_schedule.concatenate(old_probes[m, keep], old_scales[m, keep], in_place=True)
+                new_schedules.append(module_schedule)
 
-        perturbations = PerturbationMatrix.from_perturbations(new_perturbations)
+        schedule = BranchSchedule.from_assignments(new_schedules)
+        self.current = schedule
+        self.history.append(schedule)
+        return schedule
 
-        self.set_perturbations(modules, perturbations)
-        return perturbations
-
-    def generate_perturbations(self, m: int, module: ProbeableModule, num_perturbations: int) -> Perturbations:
+    def generate_module_assignments(self, controller: 'PALEController', m: int, num_branches: int) -> ModuleAssignments:
         raise NotImplementedError()
 
-    # def schedule_module(self, module: ProbeableModule, num_perturbations: int) -> tuple[Array, Array]:
+    # def schedule_module(self, module: ProbeableModule, num_branches: int) -> tuple[Array, Array]:
     #     raise NotImplementedError()
 
 
-@provides(PerturbationScheduler, 'random')
-class RandomPerturbationScheduler(PerturbationScheduler):
+@provides(BranchScheduler, 'random')
+class RandomBranchScheduler(BranchScheduler):
 
-    __slots__ = ('exploration_radius', 'p', 'mu', 'sigma')
+    __slots__ = ('exploration_radius', 'p', 'mu', 'sigma', 'min_factor', 'max_factor')
 
     exploration_radius: Annotated[float, field(
-        doc="The exploration radius of the probe perturbations",
+        doc="The exploration radius of the probe scales",
         default=1.0
     )]
     # exploration_radius_decay: Annotated[float, field(
@@ -598,9 +604,27 @@ class RandomPerturbationScheduler(PerturbationScheduler):
         doc="The sigma of the scale log normal distribution",
         default=1.0
     )]
-    p: Annotated[Optional[float], field(
-        doc="The probability that the module will be perturbed in a given perturbation",
+    min_factor: Annotated[float, field(
+        doc="The minimum factor of the exploration radius",
+        default=0.05
     )]
+    max_factor: Annotated[float, field(
+        doc="The maximum factor of the exploration radius",
+        default=1.5
+    )]
+    p: Annotated[Optional[float], field(
+        doc="The probability that the module will be perturbed in a given branch",
+    )]
+    probe_probs: Annotated[list[Array], field(
+        doc="The probability that the module will be perturbed in a given branch",
+        init=False,
+    )]
+
+    def _lazy_controllable_values(self) -> dict[str, 'ControllableValue']:
+        values = [
+            ControllableValue.from_attr(self, 'exploration_radius'),
+        ]
+        return {value.name: value for value in values}
 
     def modify_exploration_radius(self, nv: float, ov: float = None):
         if ov is None: ov = self.exploration_radius
@@ -617,56 +641,51 @@ class RandomPerturbationScheduler(PerturbationScheduler):
     #         self.modify_exploration_radius(self.exploration_radius * self.exploration_radius_decay)
     #     return cnt
 
-    def generate_perturbations(self, m: int, module: ProbeableModule, num_perturbations: int) -> Perturbations:
-        k_m = module.probes.k
+    def generate_module_assignments(self, controller: 'PALEController', m: int, num_branches: int) -> ModuleAssignments:
+        k_m = controller.get_num_probes(m)
         p = self.p
         if p is None:
-            probes = ten.random.randint(low=0, high=k_m+1, shape=(num_perturbations,))
+            probes = ten.random.randint(low=0, high=k_m+1, shape=(num_branches,))
         else:
-            # Decide whether the module is perturbed in each perturbation
-            perturbed = ten.random.bernoulli(p, shape=(num_perturbations,))
+            # Decide whether the module is perturbed in each branch
+            perturbed = ten.random.bernoulli(p, shape=(num_branches,))
             # Randomly assign probe indexes between 1 and k_m for the ones that are perturbed
-            probes = perturbed * ten.random.randint(low=1, high=k_m+1, shape=(num_perturbations,))
-        # Scale by +/- magnitude
-        scales = self.exploration_radius * ten.exp(self.mu + self.sigma * ten.random.normal(shape=(num_perturbations,)))
-        scales = ten.clip(scales, 0.005, 0.5)
-        scale_sign = (2. * ten.random.bernoulli(0.5, shape=(num_perturbations,)) - 1.0)
+            probes = perturbed * ten.random.randint(low=1, high=k_m+1, shape=(num_branches,))
 
-        scales = ten.where(probes == 0, 0., scales * scale_sign)
-        # ten.eval(probes, scales)
-        if self.force_null_perturbation:
+        # Make sure the null branch is always present
+        if self.force_null_branch:
             probes[0] = 0
-            scales[0] = 0.
 
-        return Perturbations(probes, scales)
+        # Scale by +/- magnitude
+        scales = self.exploration_radius * ten.exp(self.mu + self.sigma * ten.random.normal(shape=(num_branches,)))
 
-    # def schedule_module(self, module: ProbeableModule, num_perturbations: int) -> tuple[Array, Array]:
-    #     k_m = module.probes.k
-    #     p = self.p
-    #     if p is None:
-    #         probes = ten.random.randint(low=0, high=k_m+1, shape=(num_perturbations,))
-    #     else:
-    #         # Decide whether the module is perturbed in each perturbation
-    #         perturbed = ten.random.bernoulli(p, shape=(num_perturbations,))
-    #         # Randomly assign probe indexes between 1 and k_m for the ones that are perturbed
-    #         probes = perturbed * ten.random.randint(low=1, high=k_m+1, shape=(num_perturbations,))
-    #     # Scale by +/- magnitude
-    #     scales = self.exploration_radius * ten.exp(self.mu + self.sigma * ten.random.normal(shape=(num_perturbations,)))
-    #     scales = ten.clip(scales, 0.005, 0.5)
-    #     scale_sign = (2. * ten.random.bernoulli(0.5, shape=(num_perturbations,)) - 1.0)
-    #
-    #     scales = ten.where(probes == 0, 0., scales * scale_sign)
-    #     # ten.eval(probes, scales)
-    #     if self.force_null_perturbation:
-    #         probes[0] = 0
-    #         scales[0] = 0.
-    #     return probes, scales
+        # Clip the scales to be between min and max
+        scales = ten.clip(scales, self.min_factor * self.exploration_radius, self.max_factor * self.exploration_radius)
+
+        # Make the scales negative 50% of the time
+        scales *= 2. * ten.random.bernoulli(0.5, shape=(num_branches,)) - 1.0
+
+        # Make sure the scale is 0.0 whenever the probe is 0
+        scales = ten.where(probes == 0, 0., scales)
+
+        # ten.eval(probes, scales)
+
+        return ModuleAssignments(probes, scales)
+
+    def _repr_arg_items(self, **options) -> Iterable[Any]:
+        yield from super()._repr_arg_items(**options)
+        yield f'exploration_radius={self.exploration_radius}'
+        yield f'p={self.p}'
+        yield f'mu={self.mu}'
+        yield f'sigma={self.sigma}'
+        yield f'max_factor={self.max_factor}'
+        yield f'min_factor={self.min_factor}'
 
 
 @provides(Module, 'simple-mlp')
 class SimpleMLP(CompiledModule):
 
-    __slots__ = ('layers', 'activation')
+    __slots__ = ('layers', 'activation', 'normalize')
 
     layers: Annotated[list[Module], field(
         doc="The list of layers",
@@ -675,6 +694,10 @@ class SimpleMLP(CompiledModule):
     activation: Annotated[Activation, field(
         doc="The activation function",
     )]
+    normalize: Annotated[bool, field(
+        doc="Whether to normalize after each layer",
+        default=False,
+    )]
 
     def init_from_args(self, args: ModuleArgs):
         super().init_from_args(args)
@@ -682,20 +705,24 @@ class SimpleMLP(CompiledModule):
         in_dim = args.get('in_dim')
         out_dim = args.get('out_dim')
         hidden_dim = args.get('hidden_dim', default=max(in_dim, out_dim))
-        layer_kind = args.get('layer_kind', default='linear')
+        projection_kind = args.get('projection_kind', default='linear')
         num_layers = args.get('num_layers', default=3)
+
+        self.normalize = args.get('normalize', default=False)
 
         if num_layers < 2:
             raise ValueError("num_layers must be at least 2")
 
         act = args.get('activation', default='relu')
         self.activation = coerce(Activation, kind=act)
-        self.layers = [Module.from_args(in_dim=in_dim, out_dim=hidden_dim, bias=False, kind=layer_kind)]
+        self.layers = [
+            Module.from_args(in_dim=in_dim, out_dim=hidden_dim, bias=False, kind=projection_kind)
+        ]
 
         for _ in range(num_layers-2):
-            self.layers.append(Module.from_args(in_dim=hidden_dim, out_dim=hidden_dim, bias=False, kind=layer_kind))
+            self.layers.append(Module.from_args(in_dim=hidden_dim, out_dim=hidden_dim, bias=False, kind=projection_kind))
 
-        self.layers.append(Module.from_args(in_dim=hidden_dim, out_dim=out_dim, bias=False, kind=layer_kind))
+        self.layers.append(Module.from_args(in_dim=hidden_dim, out_dim=out_dim, bias=False, kind=projection_kind))
 
     @property
     def in_dim(self) -> int:
@@ -710,11 +737,22 @@ class SimpleMLP(CompiledModule):
         inner_layers = self.layers[:-1]
         last_layer = self.layers[-1]
 
-        def call(x: Array) -> Array:
-            for layer in inner_layers:
-                x = layer(x)
-                x = activation(x)
-            return last_layer(x)
+        if self.normalize:
+            eps = 1e-6
+            norm = ten.norm
+
+            def call(x: Array) -> Array:
+                for layer in inner_layers:
+                    x = layer(x)
+                    x = activation(x)
+                    x = x / (norm(x) + eps)
+                return last_layer(x)
+        else:
+            def call(x: Array) -> Array:
+                for layer in inner_layers:
+                    x = layer(x)
+                    x = activation(x)
+                return last_layer(x)
 
         return call
 
@@ -725,7 +763,8 @@ class SimpleMLP(CompiledModule):
 @provides(Module, 'simple-rnn')
 class SimpleRNN(CompiledModule):
 
-    __slots__ = ('input_proj', 'hidden_proj', 'output_proj', 'activation')
+    __slots__ = ('input_proj', 'hidden_proj', 'output_proj', 'memory_proj', 'activation',
+                 'memory', 'sever', 'noise')
 
     input_proj: Annotated[Module, field(
         doc="The input projection",
@@ -736,8 +775,23 @@ class SimpleRNN(CompiledModule):
     output_proj: Annotated[Module, field(
         doc="The output projection",
     )]
+    memory_proj: Annotated[Optional[Module], field(
+        doc="The memory projection",
+    )]
     activation: Annotated[Activation, field(
         doc="The activation function",
+    )]
+    memory: Annotated[int, field(
+        doc="Size of a discrete scrapbook memory to use or zero if no memory",
+        default=0
+    )]
+    sever: Annotated[bool, field(
+        doc="Whether to sever the hidden state from the output projection",
+        default=False
+    )]
+    noise: Annotated[float, field(
+        doc="The scale for random Guassian noise to inject into the hidden state at each step",
+        default=0.0
     )]
 
     def init_from_args(self, args: ModuleArgs):
@@ -747,13 +801,25 @@ class SimpleRNN(CompiledModule):
         out_dim = args.get('out_dim')
         hidden_dim = args.get('hidden_dim', default=max(in_dim, out_dim))
         projection_kind = args.get('projection_kind', default='linear')
+        memory = args.get('memory', default=0)
+        sever = bool(args.get('sever', default=False))
 
         act = args.get('activation', default='tanh')
         self.activation = coerce(Activation, kind=act)
+        self.memory = memory
+        self.sever = sever
+        self.noise = args.get('noise', 0.0)
+
+        out_in_dim = memory if sever else hidden_dim + memory
+
+        if memory > 0:
+            self.memory_proj = Module.from_args(in_dim=hidden_dim, out_dim=memory, bias=False, kind=projection_kind)
+        else:
+            self.memory_proj = None
 
         self.input_proj = Module.from_args(in_dim=in_dim, out_dim=hidden_dim, bias=True, kind=projection_kind)
         self.hidden_proj = Module.from_args(in_dim=hidden_dim, out_dim=hidden_dim, bias=False, kind=projection_kind)
-        self.output_proj = Module.from_args(in_dim=hidden_dim, out_dim=out_dim, bias=True, kind=projection_kind)
+        self.output_proj = Module.from_args(in_dim=out_in_dim, out_dim=out_dim, bias=True, kind=projection_kind)
 
     @property
     def in_dim(self) -> int:
@@ -773,323 +839,425 @@ class SimpleRNN(CompiledModule):
         hidden_dim = self.hidden_dim
         hidden_proj = self.hidden_proj
         output_proj = self.output_proj
+        memory_proj = self.memory_proj
+        memory = self.memory
+        noise = self.noise
 
-        def call(x: Array) -> Array:
-            h = ten.zeros((*x.shape[:-2], hidden_dim))
-            for t in range(x.shape[-2]):
-                xp_t = input_proj(x[..., t, :])
-                hp_t = hidden_proj(h)
-                h = activation(xp_t + hp_t)
-            out = output_proj(h)
-            return out
+        if noise > 0.0:
+            def hidden(x: Array) -> Array:
+                h = activation(x)
+                return h + ten.random.normal(0., noise, shape=h.shape)
+        else:
+            hidden = activation
+
+        if memory_proj is not None:
+            if self.sever:
+                def call(x: Array) -> Array:
+                    h = ten.zeros((*x.shape[:-2], hidden_dim), dtype=x.dtype)
+                    m = ten.zeros((*x.shape[:-2], memory), dtype=x.dtype)
+                    for t in range(x.shape[-2]):
+                        xp_t = input_proj(x[..., t, :])
+                        if t == 0:
+                            mp = memory_proj(activation(xp_t))
+                            # mp = memory_proj(xp_t)
+                            i = ten.detach(ten.argmax(mp, axis=-1))
+                            m = ten.one_hot(i, num_classes=memory, dtype=x.dtype)
+                        hp_t = hidden_proj(h)
+                        h = hidden(xp_t + hp_t)
+                    out = output_proj(m)
+                    return out
+            else:
+                def call(x: Array) -> Array:
+                    h = ten.zeros((*x.shape[:-2], hidden_dim), dtype=x.dtype)
+                    m = ten.zeros((*x.shape[:-2], memory), dtype=x.dtype)
+                    for t in range(x.shape[-2]):
+                        xp_t = input_proj(x[..., t, :])
+                        if t == 0:
+                            mp = memory_proj(activation(xp_t))
+                            # mp = memory_proj(xp_t)
+                            i = ten.detach(ten.argmax(mp, axis=-1))
+                            m = ten.one_hot(i, num_classes=memory, dtype=x.dtype)
+                        hp_t = hidden_proj(h)
+                        h = hidden(xp_t + hp_t)
+                    hm = ten.concat([h, m], axis=-1)
+                    out = output_proj(hm)
+                    return out
+        else:
+
+            def call(x: Array) -> Array:
+                h = ten.zeros((*x.shape[:-2], hidden_dim), dtype=x.dtype)
+                for t in range(x.shape[-2]):
+                    xp_t = input_proj(x[..., t, :])
+                    hp_t = hidden_proj(h)
+                    h = hidden(xp_t + hp_t)
+                out = output_proj(h)
+                return out
+
         return call
 
     def _extra_structure(self) -> str:
         return f'in_dim={self.in_dim}, hidden_dim={self.hidden_dim}, out_dim={self.out_dim}'
 
 
-
-class CreditAssigner(Controllable):
-
-    __slots__ = ('lr', 'lr_decay', 'decay_every')
-
-    lr: Annotated[float, field(
-        doc="The learning rate for credit assignment",
-        default=0.05,
-    )]
-    lr_decay: Annotated[float, field(
-        doc="The learning rate decay for credit assignment",
-        default=1.00,
-    )]
-    decay_every: Annotated[float, field(
-        doc="How often to decay the learning rate for credit assignment",
-        default=1000000,
-    )]
-
-    def assign_credit(self, controller: 'ProbeController', step: int, losses: Array):
-        raise NotImplementedError()
-
-
-@provides(CreditAssigner, 'greedy')
-class GreedyCreditAssigner(CreditAssigner):
+class CreditAssigner(ALEComponent):
 
     __slots__ = ()
 
-    def assign_credit(self, controller: 'ProbeController', step: int, losses: Array):
-        lr = self.lr
-        advantage_eps = 1e-6
-        perturbations = controller.perturbations
+    def assign_credit(self, controller: 'PALEController', step: int, losses: Array) -> Credit:
+        raise NotImplementedError()
 
-        best = ten.argmin(losses)
 
-        best_probes = perturbations.probes[:, best]
+class BestCreditAssigner(CreditAssigner):
+
+    __slots__ = ()
+
+    def get_best(self, losses: Array) -> Array:
+        raise NotImplementedError()
+
+    def assign_credit(self, controller: 'PALEController', step: int, losses: Array) -> Credit:
+        best = self.get_best(losses)
+
+        schedule = controller.schedule
+
+        best_probes, best_scales = schedule.get_probes_and_scales(best)
 
         baseline_loss = losses[0]
-        advantage = ten.maximum(0., baseline_loss - losses)
+        advantages = baseline_loss - losses
 
-        advantage = advantage / (advantage[best] + advantage_eps)
+        mean_advantage = ten.mean(advantages)
 
-        controller.receive_telemetry_item('advantage', advantage)
+        num_win = ten.sum(1.0 * (advantages > 0))
+        pct_win = num_win / advantages.shape[0]
 
-        # if step % self.decay_every == 0:
-        #     lr = self.lr = lr * self.lr_decay
+        losses_std = ten.std(losses)
 
-        for m, mod in enumerate(controller.modules):
-            if mod.is_probing:
-                credit = ten.zeros((mod.probes.k + 1,))
-                probe = best_probes[m]
-                credit[probe] = perturbations.scales[m, best]
-                # ten.eval(credit)
-                mod.update_from_credit(credit, lr=lr)
-                controller.receive_telemetry_item('credit', credit)
+        best_advantage = advantages[best]
+        best_std_advantage = best_advantage  / losses_std
+
+        # advantages = advantages / (best_advantage + advantage_eps)
+
+        credit = Credit(best_probes, best_scales, advantages)
+
+        best_scale = ten.mean(ten.abs(best_scales))
+        mean_scale = ten.mean(ten.abs(schedule.scales))
+
+        controller.receive_telemetry(Telemetry.construct(
+            best_advantage=best_advantage,
+            best_scale=best_scale/mean_scale,
+            mean_scale=mean_scale,
+            best_std_advantage=best_std_advantage,
+            pct_win=pct_win,
+            mean_std_advantage=ten.minimum(5., (ten.sum(advantages)/num_win)/losses_std),
+            mean_advantage=mean_advantage,
+            advantages=advantages,
+            advantages_std=ten.std(advantages),
+        ))
+
+        return credit
+
+
+@provides(CreditAssigner, 'greedy')
+class GreedyCreditAssigner(BestCreditAssigner):
+
+    __slots__ = ()
+
+    def get_best(self, losses: Array) -> Array:
+        return ten.argmin(losses)[None]
 
 
 @provides(CreditAssigner, 'top_k')
-class TopKCreditAssigner(CreditAssigner):
+class TopKCreditAssigner(BestCreditAssigner):
 
     __slots__ = ('top_k', )
 
     top_k: Annotated[int, field(
-        doc="The number of perturbation to use for credit assignment",
+        doc="The number of branches to use for credit assignment",
         default=1,
     )]
 
-    def assign_credit(self, controller: 'ProbeController', step: int, losses: Array):
-        top_k = self.top_k
-        lr = self.lr
-        advantage_eps = 1e-6
-        perturbations = controller.perturbations
+    def get_best(self, losses: Array) -> Array:
+        return ten.argpartition(losses, self.top_k)
 
-        best = ten.argsort(losses)[:top_k]
-
-        best_probes = perturbations.probes[:, best]
-
-        baseline_loss = losses[0]
-        advantage = ten.maximum(0., baseline_loss - losses)
-
-        advantage = advantage / (ten.sum(advantage[best], keepdims=True) + advantage_eps)
-
-        # controller.record_advantage(advantage)
-        controller.receive_telemetry_item('advantage', advantage)
-
-        # if step % self.decay_every == 0:
-        #     lr = self.lr = lr * self.lr_decay
-
-        for m, mod in enumerate(controller.modules):
-            if mod.is_probing:
-                credit = ten.zeros((mod.probes.k + 1,))
-                i = best_probes[m]
-                for k in range(top_k):
-                    p = best[k]
-                    probe_credit = perturbations.scales[m, p] * advantage[p]
-                    credit[i[k]] += probe_credit
-                # ten.eval(credit)
-                mod.update_from_credit(credit, lr=lr)
-                controller.receive_telemetry_item('credit', credit)
-                # controller.record_credit(m, credit)
+    def _repr_arg_items(self, **options) -> Iterable[Any]:
+        yield from super()._repr_arg_items(**options)
+        yield f'top_k={self.top_k}'
 
 
-@provides(Experiment, 'sgd')
-class GradientDescentExperiment(StudentTrainingExperiment):
+class UpdateRule(ALEComponent):
 
-    __slots__ = ('optimizer_kind',)
+    __slots__ = ('step_size', )
 
-    optimizer_kind: Annotated[str, field(
-        doc='The optimizer kind to use'
+    step_size: Annotated[float, field(
+        doc="The step size for udpates",
+        default=0.05,
     )]
 
-    @staticmethod
-    def loss_fn(outputs: Array, targets: Array) -> Array:
-        return ten.mean(
-            ten.square(outputs - targets)
-        )
+    def _lazy_controllable_values(self) -> dict[str, 'ControllableValue']:
+        values = [
+            ControllableValue.from_attr(self, 'step_size', name='step_size'),
+        ]
+        return {value.name: value for value in values}
 
-    def _lazy_optimizer_kind(self) -> str:
-        return self.name
-
-    def train(self) -> int:
-        lr = self.get_param('lr')
-
-        student = self.student
-
-        optimizer_kind = self.optimizer_kind
-        if optimizer_kind == 'adam':
-            kwargs = dict(weight_decay=self.get_param('weight_decay'))
-        elif optimizer_kind == 'sgd':
-            kwargs = dict(momentum=self.get_param('momentum'))
-        else:
-            kwargs = dict()
-
-        optimizer = Optimizer.coerce(model=student, learning_rate=lr, kind=optimizer_kind, **kwargs)
-
-        bucket_desc = self.descriptor
-
-        loss_fn = self.loss_fn
-        header = self.header
-        log = self.print
-        report_every = self.report_every
-
-        def train_fn(batch: tuple[Array, Array]):
-            inputs, targets = batch
-            outputs = student(inputs)
-            return loss_fn(outputs, targets)
-
-        step = optimizer.stepper(train_fn)
-
-        s = 1
-        losses = ArrayBuffer()
-        header(f'Student[{bucket_desc}] Training')
-
-        for e in range(self.num_epochs):
-            header(f'Student[{bucket_desc}] Epoch: {e+1:2d}')
-            for b in self.batch_data(self.batch_size):
-                loss = step(b)
-                # ten.eval(loss)
-                losses.append(loss[None])
-                if s % report_every == 0:
-                    log(f'Step: {s:5d}  Loss: {loss:.6f}')
-                s += 1
-
-        for inputs, targets in self.batch_data(1024):
-            outputs = student(inputs)
-            loss = loss_fn(outputs, targets)
-            log(f'Student[{self.descriptor}] Final loss: {loss:.6f}') # 0.028599 0.083547
-            break
-
-        self.add_metric('loss', losses)
-
-        return s-1
+    def update_module(self, controller: 'ModuleController', credit: Credit):
+        m = controller.index
+        module = controller.module
+        probes, creds = credit.get_credit(m)
+        coefficients = self.step_size * creds
+        module.update_in_directions(probes, coefficients)
 
 
-@provides(ControllableValue, 'learning-rate')
-class LearningRate(ControllableValue):
 
-    __slots__ = ('creditor',)
+class ModuleController(ALEComponent):
 
-    creditor: Annotated[CreditAssigner, field(
-        doc="The creditor to control",
-        required=True,
+    __slots__ = ('owner', 'index', 'module', 'needs_bias',
+                 'probe_win_counts', 'probe_count_decay',
+                 'num_probes', 'keep_probes')
+
+    owner: Annotated['PALEController', field(
+        doc="The owner of this module controller",
     )]
-
-    @property
-    def name(self) -> str:
-        return 'creditor.learning_rate'
-
-    def get_value(self) -> float:
-        return self.creditor.lr
-
-    def set_value(self, value: float) -> None:
-        self.creditor.lr = value
-
-
-@provides(ControllableValue, 'exploration-radius')
-class ExplorationRadius(ControllableValue):
-
-    __slots__ = ('scheduler',)
-
-    scheduler: Annotated[RandomPerturbationScheduler, field(
-        doc="The scheduler to control",
-        required=True,
+    index: Annotated[int, field(
+        doc="The index of this controller in the list of controllers",
     )]
-
-    @property
-    def name(self) -> str:
-        return 'scheduler.exploration_radius'
-
-    def get_value(self) -> float:
-        return self.scheduler.exploration_radius
-
-    def set_value(self, value: float) -> None:
-        self.scheduler.modify_exploration_radius(value)
-
-
-class ProbeController(ALEController):
-
-    __slots__ = ('modules', 'perturbations', 'creditor', 'generator', 'scheduler', 'num_perturbations')
-
-    modules: Annotated[list[ProbeableModule], field(
-        doc="The probable modules to be scheduled",
+    module: Annotated[ProbeableModule, field(
+        doc="The module controlled",
     )]
-    perturbations: Annotated[PerturbationMatrix, field(
-        doc="The current perturbation matrix"
+    needs_bias: Annotated[bool, field(
+        doc='Whether the module needs a bias too',
+        default=False,
     )]
-    creditor: Annotated[CreditAssigner, field(
-        doc="The object responsible for managing probe credits"
+    probe_win_counts: Annotated[Array, field(
+        doc="The number of times each probe was best for each modules",
     )]
-    generator: Annotated[ProbeGenerator, field(
-        doc="The object responsible for generating perturbations"
+    probe_count_decay: Annotated[float, field(
+        doc="The amount to decay probe counts by each step",
+        default=0.9,
     )]
-    scheduler: Annotated[PerturbationScheduler, field(
-        doc="The object responsible for scheduling perturbation application"
+    num_probes: Annotated[int, field(
+        doc="The number of probes for this module",
     )]
-    num_perturbations: Annotated[int, field(
-        doc="The number of perturbations to run in parallel",
+    keep_probes: Annotated[int, field(
+        doc="The number of probes to keep for this module",
     )]
 
     def postinit(self, spec: Spec):
         super().postinit(spec)
+        if isinstance(self.module, ProbedLinear):
+            self.needs_bias = self.module.bias is not None
 
-        if 'modules' not in spec:
-            model = self.model
-            modules = []
+    def _num_probes_changed(self, val: int, old: int):
+        self.probe_win_counts = ten.zeros((val + 1,), dtype=ten.float32)
+
+    @property
+    def dtype(self) -> DType:
+        return self.module.dtype
+
+    @property
+    def in_dim(self) -> int:
+        return self.module.in_dim
+
+    @property
+    def out_dim(self) -> int:
+        return self.module.out_dim
+
+    def generate_probes(self, probe_manager: ProbeManager, step: int):
+        if step == 0:
+            probes = probe_manager.generate(self)
+        else:
+            kp = -self.keep_probes
+            if kp == 0:
+                probes = probe_manager.generate(self)
+            else:
+                keep = ten.argsort(self.probe_win_counts[1:])[kp:] + 1
+                probes = probe_manager.generate(self, keep)
+                probe_win_counts = ten.zeros((self.num_probes + 1,), dtype=ten.float32)
+                probe_win_counts[kp:] = self.probe_win_counts[keep]
+                self.probe_win_counts = probe_win_counts
+
+        self.module.update_probes(probes)
+
+    def update_module(self, credit: Credit, rule: UpdateRule):
+        rule.update_module(self, credit)
+
+        probes = credit.get_probes(self.index)
+        probe_win_counts = self.probe_win_counts * self.probe_count_decay
+        np = probes.shape[-1]
+        if np == 1:
+            probe_win_counts[probes] += 1.
+        else:
+            probe_win_counts = ten.index_add(probe_win_counts, probes, ten.ones(probes.shape, dtype=probe_win_counts.dtype))
+        self.probe_win_counts = probe_win_counts
+
+    def schedule_module(self, schedule: BranchSchedule):
+        self.module.update_assignments(schedule.get_module_assignments(self.index))
+
+
+trigger_defaults = {
+    'credit': 1,
+    'update': 1,
+    'schedule': 1,
+    'generate': 50,
+    'adapt': 500,
+}
+
+class PALEController(ALEController):
+
+    __slots__ = ('modules', 'params', 'schedule', 'controllers',
+                 'credit_assigner', 'probe_manager', 'scheduler',
+                 'update_rule',
+                 'num_branches',
+                 'triggers',
+                 )
+
+    modules: Annotated[list[ProbeableModule], field(
+        doc="The probable modules to be scheduled",
+    )]
+    controllers: Annotated[list[ModuleController], field(
+        doc="The controllers for each module",
+    )]
+    params: Annotated[Params, field(
+        doc='The parameters for this experiment',
+        default_factory=dict,
+    )]
+    schedule: Annotated[BranchSchedule, field(
+        doc="The current branch schedule"
+    )]
+    credit_assigner: Annotated[CreditAssigner, field(
+        doc="The object responsible for managing probe credits",
+        coerce=True,
+    )]
+    probe_manager: Annotated[ProbeManager, field(
+        doc="The object responsible for generating probes",
+        coerce=True,
+    )]
+    scheduler: Annotated[BranchScheduler, field(
+        doc="The object responsible for scheduling branches",
+        coerce=True,
+    )]
+    update_rule: Annotated[UpdateRule, field(
+        doc="The object responsible for updating module parameters",
+        coerce=True,
+    )]
+    triggers: Annotated[dict[str, Predicate[int]], field(
+        doc="The triggers for this controller",
+        default_factory=dict,
+    )]
+    num_branches: Annotated[int, field(
+        doc="The number of branches to run in parallel",
+    )]
+
+    def _lazy_states(self) -> dict[str, LearningState]:
+        return {
+            'loss': LearningState.coerce(name='loss', record=True, kind='ema', controller=self)
+        }
+
+    def _lazy_update_rule(self) -> UpdateRule:
+        return UpdateRule()
+
+    def _coerce_triggers(self, spec: Any) -> dict[str, Predicate[int]]:
+        if spec is None: return {}
+        if isinstance(spec, Mapping):
+            def make_trigger(t) -> Predicate[int]:
+                if isinstance(t, int): return predicates.every_n(t)
+                return predicates.coerce(t)
+            return {
+                name: make_trigger(trig) for name, trig in spec.items()
+            }
+        raise ValueError(f'Cannot coerce to dict[str, Predicate[int]]: {spec!r}')
+
+    def postinit(self, spec: Spec):
+        super().postinit(spec)
+
+        params = self.params
+
+        if adapters := params.get('adapters'):
+            for name, adapter_spec in adapters.items():
+                self.add_adapter(LearningAdapter.coerce(controller=self, **adapter_spec), name=name, overwrite=True)
+
+    def build_components(self) -> dict[str, ALEComponent]:
+        model = self.model
+        params = self.params
+
+        modules = self.modules
+        if not modules:
             for path, module in tree.traverse(model, include=tree.value_predicate(predicates.is_instance(ProbeableModule))):
                 modules.append(module)
-            self.modules = modules
 
-        states = self.states
+        def get_list(p: Any) -> list:
+            if isinstance(p, list):
+                if len(p) < len(modules):
+                    return p + p[-1:] * (len(modules) - len(p))
+                return p
+            return [p] * len(modules)
 
-        if 'loss' not in states:
-            states['loss'] = ControllerState.coerce(name='loss', controller=self, kind='ema')
+        np = get_list(self.probe_manager.num_probes)
+        kp = get_list(params.get('keep_probes', 0))
 
-        for state in self.states.values():
-            self.add_receiver(state)
+        controllers = [
+            ModuleController(
+                owner=self,
+                index=m,
+                module=module,
+                num_probes=np[m],
+                keep_probes=kp[m]
+            )
+            for m, module in enumerate(modules)
+        ]
 
-        self.add_adapter(Adapter.coerce(
-            controller=self,
-            value=ExplorationRadius(
-                scheduler=self.scheduler,
-            ),
-            state='loss',
-            threshold=0.1,
-            delta_threshold=-0.05,
-            max_value=1.0,
-            min_value=0.01,
-            multiplier=1.1,
-            kind='ema-state',
-        ))
+        components: dict[str, ALEComponent] = {
+            'probe_manager': self.probe_manager,
+            'scheduler': self.scheduler,
+            'credit_assigner': self.credit_assigner,
+            'update_rule': self.update_rule,
+        }
+        for i, controller in enumerate(controllers):
+            components[f'module.{i}'] = controller
 
-        self.add_adapter(Adapter.coerce(
-            controller=self,
-            value=LearningRate(
-                creditor=self.creditor,
-            ),
-            max_value=0.2,
-            min_value=0.01,
-            decay=0.9,
-            decay_every=3000,
-            kind='decay',
-            # state='loss',
-            # threshold=1.5,
-            # delta_threshold=-0.05,
-            # multiplier=1.1,
-            # kind='ema-state',
-        ))
+        self.controllers = controllers
+
+        return components
+
+    def build_trigger(self, name: str) -> Predicate[int]:
+        trigger = self.triggers.get(name)
+        if trigger is None:
+            every = trigger_defaults.get(name, 1)
+            return predicates.every_n(every)
+        return trigger
 
     @property
     def num_modules(self) -> int:
         return len(self.modules)
 
-    def initialize(self):
-        modules = self.modules
+    def initialize_training(self):
+        self.generate_probes(0)
+        self.schedule_branches(0)
 
-        for m, module in enumerate(modules):
-            self.generator.generate(self, m, module)
+    def finalize_training(self):
+        pass
 
-        self.perturbations = self.scheduler.schedule(self, modules, self.num_perturbations)
+    def generate_probes(self, step: int) -> None:
+        probe_manager = self.probe_manager
+        for controller in self.controllers:
+            controller.generate_probes(probe_manager, step)
 
-    def add_adapter(self, adapter: Adapter, name: str = None):
+    def schedule_branches(self, step: int) -> None:
+        schedule = self.scheduler.schedule(self, self.num_branches)
+        for controller in self.controllers:
+            controller.schedule_module(schedule)
+        self.schedule = schedule
+
+    def add_state(self, state: LearningState, name: str = None):
+        if name is None: name = state.name
+        if name not in self.states:
+            self.states[name] = state
+
+    def add_ema_state(self, name: str):
+        if name not in self.states:
+            self.states[name] = LearningState.coerce(name=name, controller=self, kind='ema')
+
+    def add_adapter(self, adapter: LearningAdapter, name: str = None, overwrite: bool = False):
         if name is None: name = adapter.name
-        if name not in self.adapters:
+        if overwrite or name not in self.adapters:
             self.adapters[name] = adapter
 
     def get_module(self, m: int) -> ProbeableModule:
@@ -1106,638 +1274,112 @@ class ProbeController(ALEController):
             if isinstance(module, cls):
                 yield module
 
+    def get_num_probes(self, m: int) -> int:
+        return self.controllers[m].num_probes
+
+    def get_probe_counts(self, m: int) -> Optional[Array]:
+        return self.controllers[m].probe_win_counts
+
     def receive_telemetry(self, telemetry: Telemetry, name: str = None, buffer: bool = True):
         if buffer:
             self.buffered_telemetry.merge(telemetry)
         else:
             super().receive_telemetry(telemetry, name)
 
-    def receive_telemetry_item(self, item: str, data: Any, buffer: bool = True):
-        if buffer:
-            self.buffered_telemetry.update_item(item, data, merge=True)
-        else:
-            super().receive_telemetry_item(item, data)
+    # def receive_telemetry_item(self, item: str, data: Any, buffer: bool = True):
+    #     if buffer:
+    #         self.buffered_telemetry.update_item(item, data, merge=True)
+    #     else:
+    #         super().receive_telemetry_item(item, data)
 
-    def process_telemetry(self):
+    def process_telemetry(self, step: int):
         telemetry = self.buffered_telemetry
+        telemetry.step = step
         telemetry.eval()
         self.receive_telemetry(telemetry, buffer=False)
         self.buffered_telemetry = Telemetry()
 
-    # @property
-    # def loss(self) -> EMAState:
-    #     loss = self.states['loss']
-    #     if isinstance(loss, EMAState):
-    #         return loss
-    #     else:
-    #         raise ValueError(f"Expected 'loss' state to be an EMAState, got {type(loss)}")
+    def build_step(self) -> Callable[[int, Array, Array], Array]:
 
-    def stepper(self, generate_every: int, schedule_every: int):
         model = self.model
-        modules = self.modules
-        scheduler = self.scheduler
-        generator = self.generator
-        creditor = self.creditor
+        controllers = self.controllers
+        credit_assigner = self.credit_assigner
+        update_rule = self.update_rule
         loss_fn = self.loss_fn
-
-        adaptive_warmup = 3000
-        adapt_every = 500
         adapters = self.adapters
 
-        def take_step(step: int, inputs: Array, targets: Array) -> Array:
-            np = self.num_perturbations
-            inputs = ten.broadcast_to(inputs[None], (np, *inputs.shape))
+        cume_branch_losses = ten.zeros((self.num_branches,))
+
+        generate_trigger = self.build_trigger('generate')
+        schedule_trigger = self.build_trigger('schedule')
+        credit_trigger = self.build_trigger('credit')
+        update_trigger = self.build_trigger('update')
+        adapt_trigger = self.build_trigger('adapt')
+        telemetry_trigger = self.build_trigger('telemetry')
+
+        credit_buffer: list[Credit] = []
+
+        generate_probes = self.generate_probes
+        schedule_branches = self.schedule_branches
+        send_telemetry = self.receive_telemetry
+        process_telemetry = self.process_telemetry
+
+        def update_modules(step):
+            credit = Credit.combine(credit_buffer)
+            for controller in controllers:
+                controller.update_module(credit, update_rule)
+            credit_buffer.clear()
+
+        def assign_credit(step):
+            # Assign credit and add it to the credits list
+            credit = credit_assigner.assign_credit(self, step, cume_branch_losses)
+            credit_buffer.append(credit)
+            cume_branch_losses[...] = 0.
+
+        def step_fn(step: int, inputs: Array, targets: Array) -> Array:
+            nonlocal cume_branch_losses
+
+            # Broadcast the inputs to the correct number of branches
+            nb = self.num_branches
+            inputs = ten.broadcast_to(inputs[None], (nb, *inputs.shape))
             # ten.eval(inputs, targets)
+
+            # Evaluate the model with the broadcast inputs
             outputs = model(inputs)
 
-            losses = loss_fn(outputs, targets[None])
+            # Calculate the loss for each branch
+            branch_losses = loss_fn(outputs, targets[None])
 
-            creditor.assign_credit(self, step, losses)
+            cume_branch_losses += ten.detach(branch_losses)
 
-            if step % generate_every == 0:
-                for m, module in enumerate(modules):
-                    generator.generate(self, m, module)
+            if credit_trigger(step):
+                assign_credit(step)
 
-            if step % schedule_every == 0:
-                self.perturbations = scheduler.schedule(self, modules, self.num_perturbations)
+            if update_trigger(step):
+                update_modules(step)
 
-            loss = ten.detach(losses[0])
+            if generate_trigger(step):
+                generate_probes(step)
 
-            self.receive_telemetry_item('loss', loss)
-            self.receive_telemetry_item('losses', losses)
+            if schedule_trigger(step):
+                schedule_branches(step)
 
-            self.process_telemetry()
+            loss = ten.detach(branch_losses[0])
 
-            if step > adaptive_warmup and step % adapt_every == 0:
+            send_telemetry(Telemetry.construct(
+                loss=loss,
+                losses=branch_losses,
+                losses_std=ten.std(branch_losses)
+            ))
+
+            if telemetry_trigger(step):
+                process_telemetry(step)
+
+            if adapt_trigger(step):
                 for adapter in adapters.values():
                     adapter.adapt(step)
 
-            # if step % 250 == 0:
-            #     print(f'Step {step}: Loss: {loss_state.describe()}')
-
             return loss
 
-        return take_step
+        return step_fn
 
-
-@provides(Experiment, 'probed')
-class ProbedTrainingExperiment(StudentTrainingExperiment):
-
-    __slots__ = ()
-
-    @staticmethod
-    def perturbation_loss_fn(outputs: Array, targets: Array) -> Array:
-        return ten.mean(
-            ten.square(outputs - targets),
-            axis=(1, 2)
-        )
-
-    def train(self) -> int:
-
-        num_perturbations = self.get_param('num_perturbations')
-        schedule_every = self.get_param('schedule_every', default=1)
-        generate_every = self.get_param('generate_every', default=100000000000)
-
-        student = self.student
-
-        modules = []
-        for path, module in tree.traverse(student, include=tree.value_predicate(predicates.is_instance(ProbeableModule))):
-            modules.append(module)
-
-        generator_spec = self.get_params_with_prefix('generator.')
-        generator = ProbeGenerator.coerce(**generator_spec)
-
-        scheduler_spec = self.get_params_with_prefix('scheduler.')
-        scheduler = PerturbationScheduler.coerce(**scheduler_spec)
-
-        creditor_spec = self.get_params_with_prefix('creditor.')
-        creditor = CreditAssigner.coerce(**creditor_spec)
-
-        controller = ProbeController(
-            model=student,
-            modules=modules,
-            creditor=creditor,
-            generator=generator,
-            scheduler=scheduler,
-            num_perturbations=num_perturbations,
-            loss_fn=self.perturbation_loss_fn,
-        )
-
-        controller.initialize()
-
-        header = self.header
-        log = self.print
-
-        def report_perturbations():
-            probes = controller.perturbations.probes
-            scales = controller.perturbations.scales
-
-            header('probes')
-            log(ten.sign(scales) * probes)
-            header('scales')
-            log(scales)
-
-        report_perturbations()
-
-        report_every = self.report_every
-
-        s = 1
-
-        losses = ArrayBuffer()
-        header(f'Student[{self.descriptor}] Training')
-
-        step = controller.stepper(generate_every, schedule_every)
-
-        for e in range(self.num_epochs):
-            header(f'Student[{self.descriptor}] Epoch: {e+1:2d}')
-            for inputs, targets in self.batch_data(self.batch_size):
-
-                loss = step(s, inputs, targets)
-                # inputs = ten.broadcast_to(inputs[None], (num_perturbations, *inputs.shape))
-                # ten.eval(inputs, targets)
-                # outputs = student(inputs)
-                # perturbation_losses = perturbation_loss_fn(outputs, targets[None])
-                #
-                # if s % eval_every == 0:
-                #     ten.eval(perturbation_losses)
-                #
-                # creditor.assign_credit(s, scheduler, perturbation_losses)
-                #
-                # loss = perturbation_losses[0]
-                losses.append(loss[None])
-
-                # if s % generate_every == 0:
-                #     for module in modules:
-                #         module.probes = generator.generate(module)
-                #
-                # if s % schedule_every == 0:
-                #     perturbations = scheduler.schedule(num_perturbations)
-
-                if s % report_every == 0:
-                    log(f'[{self.name}]: Step: {s:5d}  Loss: {loss:.6f} Learning Rate: {creditor.lr:.4f}')
-
-                s += 1
-
-        for inputs, targets in self.batch_data(1024):
-            inputs = ten.broadcast_to(inputs[None], (controller.num_perturbations, *inputs.shape))
-            outputs = student(inputs)
-            perturbation_losses = controller.loss_fn(outputs, targets[None])
-            loss = perturbation_losses[0]
-            ten.eval(perturbation_losses)
-            log(f'Student[{self.descriptor}] Final loss: {loss:.6f}') # 0.028599 0.083547
-            break
-
-        self.add_metric(f'loss', losses)
-
-        return s-1
-
-    def fixed_param_defaults(self) -> Params:
-        return {
-            'generator.rank': 1,
-            'generator.kind': 'lora',
-            'scheduler.exploration_radius_decay': 1.0,
-            'scheduler.decay_every': 1000,
-            'creditor.top_k': 1,
-            'creditor.lr_decay': 1.0,
-            'creditor.decay_every': 1000,
-            'schedule_every': 1,
-            'scheduler.kind': 'random',
-            'creditor.kind': 'greedy',
-        }
-
-    hyperparam_abbrevs = {
-        **Experiment.hyperparam_abbrevs,
-        'generator.rank': 'gr',
-        'generator.num_probes': 'np',
-        'num_perturbations': 'P',
-        'scheduler.exploration_radius': 'er',
-        'scheduler.exploration_radius_decay': 'erd',
-        'scheduler.decay_every': 'sde',
-        'top_k': 'tk',
-        'weight_decay': 'wd',
-        'creditor.lr': 'lr',
-        'creditor.lr_decay': 'lrd',
-        'creditor.decay_every': 'cde',
-        'generate_every': 'ge',
-    }
-
-
-@provides(Experiment, 'tmaze')
-class TMazeExperiment(CachedInputExperiment):
-
-    __slots__ = ('delay',)
-
-    delay: Annotated[int, field(
-        doc='Delay in steps before credit is rewarded',
-        default=5,
-    )]
-
-    def get_module(self, spec: Any, name: str = None, save: bool | Path = True) -> Module:
-        if save is True and name is not None:
-            save = self.get_path(name, write=True)
-        return super().get_module(spec, name, save)
-
-    def generate_input_chunk(self) -> Array:
-        chunk = ten.zeros((self.in_chunk_size, self.delay, self.in_dim))
-        chunk[:, 0, 0] = 2. * ten.random.bernoulli(0.5, shape=(self.in_chunk_size,)) - 1.
-        chunk[:, 1:, 1] = ten.random.normal(scale=2., shape=(self.in_chunk_size, self.delay-1,))
-        return chunk
-
-    def batch_data(self, b: int) -> Iterable[tuple[Array, Array]]:
-        chunk_size = self.in_chunk_size
-        for i in range(self.chunks_per_epoch):
-            chunk = self.get_input_chunk(i)
-            for s in range(0, chunk_size, b):
-                inputs = chunk[s:s+b]
-                targets = inputs[..., 0, 0:1]
-                yield inputs, targets
-
-
-def moving_average(x: Array, window: int, axis: int = -1) -> Array:
-    x = ten.swapaxes(x, axis, -1)
-
-    c = ten.cumsum(x, axis=-1)
-    c[..., window:] = c[..., window:] - c[..., :-window]
-    y = c[..., window - 1:] / window
-
-    return ten.swapaxes(y, -1, axis)
-
-
-def main():
-    seeds = [
-        # 10,
-        20,
-        # 30,
-        # 40
-    ]
-
-    top = Experiment(
-        name=f'test-{time.strftime("%Y%m%d-%H%M%S", time.localtime())}',
-    )
-
-    for seed in seeds:
-        # run_teacher_regression_experiment(seed)
-        run_tmaze_experiment(seed, seed_range=4, delay=30, parent=top)
-        # run_tmaze_experiment(10, train='pbdca', seed_range=2)
-
-    top.run()
-
-    return 0
-
-
-
-def run_teacher_regression_experiment(seed: int = 10, train: Container[str]|str = None, seed_range: int = 0):
-    if isinstance(train, str): train = set(train.split(','))
-
-    train_sgd_student = 'sgd' in train if train else True
-    train_adam_student = 'adam' in train if train else True
-    train_pbdca_student = 'pbdca' in train if train else True
-
-    in_dim = 20
-    hidden_dim = 24
-    out_dim = 16
-    num_layers = 4
-    batch_size = 8
-    num_epochs = 1
-
-    arch = f'{in_dim}x' + 'x'.join(str(hidden_dim) for _ in range(num_layers-2)) + f'x{out_dim}'
-
-    experiment = Experiment.coerce(
-        kind='teacher',
-        name=f'reg-{arch}-seed-{seed}',
-        teacher=dict(
-            in_dim=in_dim,
-            out_dim=out_dim,
-            hidden_dim=hidden_dim,
-            num_layers=num_layers,
-            kind='simple-mlp',
-        ),
-        in_dim=in_dim,
-        out_dim=out_dim,
-        in_chunk_size=102400,
-        chunks_per_epoch=1
-    )
-
-    if train_sgd_student:
-
-        experiment.add_experiment(
-            kind='sgd',
-            name='sgd',
-            params={
-                'lr': 1.5e-3,
-                # 'weight_decay': 0.01,
-                'momentum': 0.9,
-            },
-            student=dict(
-                in_dim=in_dim,
-                out_dim=out_dim,
-                hidden_dim=hidden_dim,
-                num_layers=num_layers,
-                kind='simple-mlp',
-            ),
-            num_epochs=num_epochs,
-            batch_size=batch_size
-        )
-
-    if train_adam_student:
-
-        experiment.add_experiment(
-            kind='sgd',
-            name='adam',
-            params={
-                'lr': 1.5e-3,
-                # 'weight_decay': 0.01,
-                # 'momentum': 0.9,
-            },
-            student=dict(
-                in_dim=in_dim,
-                out_dim=out_dim,
-                hidden_dim=hidden_dim,
-                num_layers=num_layers,
-                kind='simple-mlp',
-            ),
-            num_epochs=num_epochs,
-            batch_size=batch_size
-        )
-
-    if train_pbdca_student:
-
-        def add_pbdca_experiment(manual_seed: int = None):
-
-            hyperparams = {
-                'generator.num_probes': 12,
-                'num_perturbations': 32,
-                'scheduler.exploration_radius': 0.4,
-                'scheduler.exploration_radius_decay': 0.8,
-                'scheduler.decay_every': 3000,
-                'creditor.lr': 0.05,
-                'creditor.lr_decay': 1.0,
-                'creditor.decay_every': 3000,
-                'generate_every': 20,
-            }
-            hyperparam_defaults = {}
-
-            student_args = dict(
-                in_dim=in_dim,
-                out_dim=out_dim,
-                hidden_dim=hidden_dim,
-                num_layers=num_layers,
-                layer_kind='linear.probed',
-                kind='simple-mlp',
-            )
-
-            sweeps = [
-                # {'generate_every': 1000},
-                # {'generate_every': 500},
-                # {'generate_every': 100},
-                # {'generate_every': 50},
-                # {'generate_every': 25, 'keep': 4},
-                # {'generate_every': 25},
-                # {'generate_every': 25, 'schedule_every': 2},
-                # {'generate_every': 25, 'generator.num_probes': 12, 'num_perturbations': 32},
-                # {'generate_every': 25, 'generator.num_probes': 12, 'num_perturbations': 48},
-                # {'generate_every': 25, 'generator.num_probes': 16, 'num_perturbations': 32},
-                # {'generate_every': 25, 'generator.num_probes': 16, 'num_perturbations': 64},
-
-                # {'top_k': 2, 'generate_every': 50},
-                # {'top_k': 2, 'generate_every': 25},
-                # {'schedule_every': 1},
-                # {'schedule_every': 2},
-                # {'schedule_every': 3},
-                # {'schedule_every': 4},
-                # {'top_k': 1, 'generator.num_probes': 12, 'num_perturbations': 32},
-                # {'top_k': 2, 'generator.num_probes': 12, 'num_perturbations': 32},
-                # {'top_k': 3, 'generator.num_probes': 12, 'num_perturbations': 32},
-                # {'top_k': 4, 'generator.num_probes': 12, 'num_perturbations': 32},
-                # {'generator.num_probes': 12, 'num_perturbations': 48},
-                # {'lr': 0.10},
-                # {'lr': 0.05},
-                # {'lr': 0.02},
-                # {'lr': 0.01},
-                # {'lr': 0.005},
-                # {'lr': 0.001},
-            ]
-
-            name = 'pbdca' if manual_seed is None else f'pbdca-seed-{manual_seed}'
-
-            if sweeps:
-                experiment.add_experiment(
-                    kind='sweep',
-                    name='sweep',
-                    child=dict(
-                        kind='probed',
-                        name=name,
-                        params=hyperparams,
-                        param_defaults=hyperparam_defaults,
-                        student=student_args,
-                        num_epochs=num_epochs,
-                        batch_size=batch_size,
-                        seed=manual_seed,
-                    ),
-                    sweeps=sweeps,
-                )
-            else:
-                experiment.add_experiment(
-                    kind='probed',
-                    name=name,
-                    params=hyperparams,
-                    param_defaults=hyperparam_defaults,
-                    student=student_args,
-                    num_epochs=num_epochs,
-                    batch_size=batch_size,
-                    seed=manual_seed,
-                )
-
-        if seed_range > 0:
-            for s in range(seed, seed+seed_range):
-                add_pbdca_experiment(s)
-        else:
-            add_pbdca_experiment(seed)
-
-    experiment.run()
-
-    return 0
-
-
-def run_tmaze_experiment(seed: int = 10, train: Container[str]|str = None, seed_range: int = 0,
-                         delay: int = 10, parent: Experiment = None):
-    if isinstance(train, str): train = set(train.split(','))
-
-    train_sgd_student = 'sgd' in train if train else True
-    train_adam_student = 'adam' in train if train else True
-    train_pbdca_student = 'pbdca' in train if train else True
-
-    in_dim = 2
-    hidden_dim = 16
-    out_dim = 1
-    batch_size = 8
-    num_epochs = 1
-
-    arch = f'tmaze-{in_dim}x{hidden_dim}x{out_dim}'
-
-    experiment = Experiment.coerce(
-        kind='tmaze',
-        parent=parent,
-        name=f'{arch}-delay-{delay}-seed-{seed}',
-        in_dim=in_dim,
-        out_dim=out_dim,
-        in_chunk_size=102400,
-        delay=delay,
-        seed=seed,
-        chunks_per_epoch=2
-    )
-
-    student_kind = 'simple-rnn'
-
-    if train_sgd_student:
-
-        experiment.add_experiment(
-            kind='sgd',
-            name='sgd',
-            params={
-                'lr': 1.5e-3,
-                # 'weight_decay': 0.01,
-                'momentum': 0.9,
-            },
-            student=dict(
-                in_dim=in_dim,
-                out_dim=out_dim,
-                hidden_dim=hidden_dim,
-                kind=student_kind,
-            ),
-            num_epochs=num_epochs,
-            batch_size=batch_size
-        )
-
-    if train_adam_student:
-
-        experiment.add_experiment(
-            kind='sgd',
-            name='adam',
-            params={
-                'lr': 1.5e-3,
-                # 'weight_decay': 0.01,
-                # 'momentum': 0.9,
-            },
-            student=dict(
-                in_dim=in_dim,
-                out_dim=out_dim,
-                hidden_dim=hidden_dim,
-                kind=student_kind,
-            ),
-            num_epochs=num_epochs,
-            batch_size=batch_size
-        )
-
-    if train_pbdca_student:
-
-        def add_pbdca_experiment(manual_seed: int = None):
-            hyperparams = {
-                'generator.num_probes': 12,
-                'num_perturbations': 32,
-                'scheduler.exploration_radius': 0.8,
-                'scheduler.exploration_radius_decay': 0.8,
-                'scheduler.decay_every': 3000,
-                'creditor.lr': 0.15,
-                'creditor.lr_decay': 0.9,
-                'creditor.decay_every': 3000,
-                'generate_every': 20,
-            }
-            hyperparam_defaults = {
-                'generator.rank': 1,
-                'creditor.lr_decay': 1.0,
-                'scheduler.exploration_radius_decay': 1.0,
-                'scheduler.decay_every': 1000,
-                'creditor.decay_every': 1000,
-                'schedule_every': 1,
-            }
-
-            student_args = dict(
-                in_dim=in_dim,
-                out_dim=out_dim,
-                hidden_dim=hidden_dim,
-                projection_kind='linear.probed',
-                kind=student_kind,
-            )
-
-            sweeps = [
-                # {'generate_every': 1000},
-                # {'generate_every': 500},
-                # {'generate_every': 100},
-                # {'generate_every': 50},
-                # {'generate_every': 25, 'keep': 4},
-                # {'generate_every': 25},
-                # {'generate_every': 25, 'schedule_every': 2},
-                # {'generate_every': 25, 'generator.num_probes': 12, 'num_perturbations': 32},
-                # {'generate_every': 25, 'generator.num_probes': 12, 'num_perturbations': 48},
-                # {'generate_every': 25, 'generator.num_probes': 16, 'num_perturbations': 32},
-                # {'generate_every': 25, 'generator.num_probes': 16, 'num_perturbations': 64},
-
-                # {'top_k': 2, 'generate_every': 50},
-                # {'top_k': 2, 'generate_every': 25},
-                # {'schedule_every': 1},
-                # {'schedule_every': 2},
-                # {'schedule_every': 3},
-                # {'schedule_every': 4},
-                # {'top_k': 1, 'generator.num_probes': 12, 'num_perturbations': 32},
-                # {'top_k': 2, 'generator.num_probes': 12, 'num_perturbations': 32},
-                # {'top_k': 3, 'generator.num_probes': 12, 'num_perturbations': 32},
-                # {'top_k': 4, 'generator.num_probes': 12, 'num_perturbations': 32},
-                # {'generator.num_probes': 12, 'num_perturbations': 48},
-                # {'creditor.lr': 0.20},
-                # {'creditor.lr': 0.10},
-                # {'creditor.lr': 0.05},
-                # {'creditor.lr': 0.02},
-                # {'creditor.lr': 0.01},
-                # {'creditor.lr': 0.005},
-                # {'creditor.lr': 0.001},
-            ]
-
-            name = 'pbdca' if manual_seed is None else f'pbdca-seed-{manual_seed}'
-
-            if sweeps:
-                experiment.add_experiment(
-                    kind='sweep',
-                    name='sweep',
-                    child=dict(
-                        kind='probed',
-                        name=name,
-                        params=hyperparams,
-                        param_defaults=hyperparam_defaults,
-                        student=student_args,
-                        num_epochs=num_epochs,
-                        batch_size=batch_size,
-                        seed=manual_seed,
-                    ),
-                    sweeps=sweeps,
-                )
-            else:
-                experiment.add_experiment(
-                    kind='probed',
-                    name=name,
-                    params=hyperparams,
-                    param_defaults=hyperparam_defaults,
-                    student=student_args,
-                    num_epochs=num_epochs,
-                    batch_size=batch_size,
-                    seed=manual_seed,
-                )
-
-        if seed_range > 0:
-            for s in range(seed, seed+seed_range):
-                add_pbdca_experiment(s)
-        else:
-            add_pbdca_experiment(seed)
-
-    if parent is None:
-        experiment.run()
-    else:
-        parent.experiments.append(experiment)
-
-    return 0
-
-
-if __name__ == '__main__':
-    import sys
-
-    sys.exit(main())

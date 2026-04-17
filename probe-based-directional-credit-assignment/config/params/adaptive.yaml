@@ -1,0 +1,66 @@
+num_branches: 32
+keep_probes: 3
+triggers:
+  credit: 1
+  update: 2
+  schedule: 2
+  generate: 20
+  adapt: 200
+  telemetry: 1
+states:
+  loss:
+    kind: ema
+    record: true
+  loss_threshold:
+    kind: first-step
+    item: loss
+    duration: 100
+    trigger:
+      lt: 0.1
+probe_manager:
+  kind: lora
+  num_probes: 16
+  rank: 1
+scheduler:
+  kind: random
+  exploration_radius: 0.8
+  max_factor: 1.5
+credit_assigner:
+  kind: greedy
+update_rule:
+  step_size: 0.15
+adapters:
+  exploration_radius:
+    kind: ema-driven
+    value: scheduler.exploration_radius
+    warmup: 1000
+    state: loss
+    max_value: 1.00
+    min_value: 0.01
+#    expand_trigger:
+#      all:
+#        - ema_plateau: 0.05
+#        - ema_slow:
+#            gt: 0.5
+    shrink_trigger:
+      all:
+        - ema_plateau: 0.05
+        - ema_slow:
+            lt: 0.1
+    expand_factor: 1.1
+    shrink_factor: 0.8
+  update_step_size:
+#    kind: decay
+    kind: ema-driven
+    value: update_rule.step_size
+    warmup: 1000
+    state: loss
+    max_value: 0.200
+    min_value: 0.001
+    shrink_trigger:
+      all:
+        - ema_plateau: 0.05
+        - ema_slow:
+            lt: 0.1
+    expand_factor: 1.1
+    shrink_factor: 0.9
