@@ -126,6 +126,14 @@ Research Engineer · ML Systems Builder
 <p><strong>Segmented Key/Value Cache</strong> — A memory-efficient KV cache that segments memory into variable-size chunks, with a first attention pass running against a "segment key" to determine whether the segment should be attended to or skipped.  We design a key/value cache with a configurable "Segment Breaker" policy and "Key Pooler" strategy and show results for a simple policy that segments the cache into fixed-length chunks (64 tokens) and uses a simple max/min key pooling strategy, demonstrating substantial attention savings with minimal loss in model coherence, even bolted on to pre-trained models. Code is a work in progress, write up forthcoming.</p>
 <h3>3. Adaptive Operators &amp; Credit Assignment</h3>
 <p>Models need better mechanisms for learning over long horizons and adapting their own internal operators online.</p>
+<p><strong>Probe-Based Directional Credit Assignment</strong> - Proposes a framework for delayed credit assignment that sits between scalar
+eligibility traces and full gradient transport. The central idea is to attach a small probe
+dictionary to each perturbable module, instantiate a batch of nearby counterfactual
+trajectories by selecting probe directions across modules, and use delayed modulatory
+signals to reinforce or suppress the sampled directions.
+| <a href="https://github.com/rvermillion/research/tree/main/probe-based-directional-credit-assignment">Source</a> 
+| <a href="https://rvermillion.github.io/research/probe-based-directional-credit-assignment.html">Write Up</a>
+| <a href="https://doi.org/10.5281/zenodo.19332672">Zenodo</a></p>
 <p><strong>RRET (Read-Refreshed Eligibility Traces)</strong> — A hybrid BPTT/eligibility-trace approach where credit traces are updated only when memories are retrieved, aligning temporal credit assignment with semantic relevance rather than recency.
 | <a href="https://github.com/rvermillion/research/tree/main/rret">Source</a> 
 | <a href="https://rvermillion.github.io/research/rret.html">Write Up</a></p>
@@ -133,6 +141,9 @@ Research Engineer · ML Systems Builder
 | <a href="https://github.com/rvermillion/research/tree/main/ploro">Source</a> 
 | <a href="https://rvermillion.github.io/research/ploro.html">Write Up</a></p>
 <p><strong>Head Preconditioning</strong> — A two-phase LM head update scheme inspired by recent work on gradient bottlenecks, implemented as an instrumentation plugin (<code>HeadPreconditionInstrument</code> in <code>tensile.extra</code>). The head is preconditioned in a fast initial phase before full-model training begins, reducing early gradient pathology.</p>
+<h3>4. Alignment and Training</h3>
+<p><strong>From Confession to Inhibition</strong> — A temporal curriculum for self-monitoring that scaffolds self-monitoring representation and rewards pre-emptive use of that representation to ensure aligned behavior.
+| <a href="https://rvermillion.github.io/research/self-monitoring-curriculum.html">Write Up</a></p>
 <hr />
 <h2>Background</h2>
 <p>I've been building AI systems since 1991, when I wrote tree-based neural networks for space shuttle telemetry anomaly detection at NASA Johnson Space Center. My formal training is in aerospace engineering (Princeton BSE), and my ML/AI expertise is self-directed — built through two decades of applied work followed by a return to architecture-level research.</p>
