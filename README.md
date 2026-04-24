@@ -87,6 +87,12 @@ signals to reinforce or suppress the sampled directions.
 
 **Head Preconditioning** — A two-phase LM head update scheme inspired by recent work on gradient bottlenecks, implemented as an instrumentation plugin (`HeadPreconditionInstrument` in `tensile.extra`). The head is preconditioned in a fast initial phase before full-model training begins, reducing early gradient pathology.
 
+### 4. Alignment and Training
+
+**From Confession to Inhibition** — A temporal curriculum for self-monitoring that scaffolds self-monitoring representation and rewards pre-emptive use of that representation to ensure aligned behavior.
+| [Write Up](https://rvermillion.github.io/research/self-monitoring-curriculum.html)
+
+
 ---
 
 ## Background
