@@ -15,6 +15,7 @@ projects = [
     'qana',
     'rotational-transformer',
     'rret',
+    'self-monitoring-curriculum',
 ]
 
 docs_dir = Path('./docs')
