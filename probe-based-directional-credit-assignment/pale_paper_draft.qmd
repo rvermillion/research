@@ -1,0 +1,496 @@
+---
+title: "Probe-based Adaptive Low-rank Exploration: Gradient-Free Learning via Probe Perturbation"
+author: "Richard Vermillion"
+date: "2026"
+format:
+  pdf:
+    documentclass: article
+    number-sections: true
+    colorlinks: true
+    cite-method: biblatex
+bibliography: references.bib
+abstract: |
+  We introduce Probe-based Adaptive Low-rank Exploration (PALE), a gradient-free learning method that learns by perturbing model weights via low-rank probes and selecting perturbation directions that improve loss. Unlike backpropagation, PALE requires no differentiable path from loss to parameters, enabling optimization through non-differentiable computational primitives such as discrete memory. We evaluate PALE on four tasks of increasing difficulty: deep feedforward regression, delayed credit assignment in a T-maze, multi-cue classification through time, and temporal credit assignment through a non-differentiable discrete memory. On a differentiable deep regression task, the method substantially outperforms SGD+momentum and approaches Adam’s final loss, despite using no backpropagated gradients. We treat this not as evidence of broad optimizer superiority, but as a sanity check: the method can recover useful directional credit even where exact gradients are available. Its distinctive advantage appears in delayed and non-differentiable settings, where the same mechanism trains through hard argmax memory writes that ordinary backpropagation cannot directly improve. Remarkably, the non-differentiable memory component that blocks gradient-based optimization actually *accelerates* PALE by providing a useful computational primitive the method can learn to exploit. These results suggest that gradient-free perturbation-based credit assignment can unlock architectural components --- discrete memory, non-differentiable gates, modular boundaries --- that are inaccessible to backpropagation.
+---
+
+# Introduction
+
+Credit assignment --- determining which parameters contributed to an outcome and how they should change --- is the central computational problem of learning. Backpropagation solves this problem exactly for differentiable computational graphs by propagating gradient information backward through the graph. This solution has powered the deep learning revolution, but it imposes a fundamental constraint: every operation between a parameter and the loss must be differentiable.
+
+This constraint is not merely theoretical. It excludes entire classes of computational primitives that would otherwise be useful: discrete memory operations (argmax, hash lookups, symbol tables), hard routing decisions, non-differentiable activation functions, and modular boundaries where gradient transport is impractical or undesirable. It also creates difficulties for temporal credit assignment in recurrent networks, where backpropagation through time (BPTT) requires storing the full computational history and becomes increasingly unreliable as the temporal horizon grows.
+
+We introduce Probe-based Adaptive Low-rank Exploration (PALE), a method that performs credit assignment without gradients by maintaining low-rank probe dictionaries at each module and evaluating random perturbation directions against the loss. The method generates a set of candidate perturbations by combining probe directions across modules, evaluates each perturbation's effect on the loss, selects the best-performing direction, and updates the model weights accordingly. Because the method only requires evaluating the loss --- not differentiating through it --- it can optimize through arbitrary non-differentiable operations.
+
+The key insight is that probe perturbations, applied across a batch-like branch dimension and combined via a scheduling matrix, create directional eligibility traces that carry approximate gradient information without requiring gradient computation. The perturbation directions that consistently improve loss across batches implicitly encode information about the local loss landscape geometry, enabling effective optimization even in settings where no gradient exists.
+
+We present a progression of experiments designed to demonstrate the method's capabilities across qualitatively different challenges:
+
+1. **Deep feedforward regression**: PALE matches Adam and substantially outperforms
+   SGD+momentum on a 7-layer network, demonstrating robust credit transport through depth.
+
+2. **T-maze with delayed credit**: PALE achieves reliable breakthrough on temporal credit
+   assignment tasks at delays of 10 to 50 steps, outperforming both SGD+momentum (which
+   fails completely) and Adam (which fails at longer delays) on a per-step basis.
+
+3. **Multi-cue T-maze**: PALE handles nonlinear cue classification through time, maintaining
+   high success rates on a 4-cue problem where Adam's success rate drops dramatically.
+
+4. **T-maze with non-differentiable discrete memory**: PALE achieves 16/16 success at delay
+   50 on a 4-cue problem with argmax-based discrete memory --- a task where Adam scores 0/4
+   because gradients cannot flow through the argmax operation. The discrete memory, which
+   represents an impenetrable barrier for gradient-based methods, actually makes the problem
+   *easier* for PALE by providing a useful storage mechanism.
+
+The differentiable regression experiment should not be read as an argument that PALE/PBDCA is a general-purpose replacement for Adam. In settings where gradients are cheap, accurate, and available, backpropagation remains the natural baseline. Instead, the regression result serves as a calibration: despite using only branch-level loss comparisons from low-rank perturbations, the method can transmit useful credit through a moderately deep differentiable network. This makes the later results harder to dismiss as accidental success on a contrived task. The central claim of the paper is not optimizer dominance, but architectural reach: PALE/PBDCA continues to work in settings where ordinary gradient methods struggle or lose access to the relevant credit path altogether.
+
+This final result demonstrates a qualitative asymmetry: architectural components that block gradient-based optimization can actively benefit perturbation-based methods. This suggests that PALE and related gradient-free approaches may unlock a design space of neural architectures incorporating non-differentiable primitives that is currently inaccessible to backpropagation-based training.
+
+
+# Related Work
+
+## Perturbation-Based Optimization
+
+The idea of learning by perturbing weights and observing the effect on a loss function has a long history. Node perturbation [@williams1992simple] and weight perturbation[@jabri1992weight] established that stochastic perturbations can provide gradient estimates, though with high variance. SPSA [@spall1992multivariate] showed that simultaneous perturbation of all parameters can estimate gradients with only two function evaluations regardless of dimensionality.
+
+More recently, evolution strategies (ES) have been scaled to large models.@salimans2017evolution demonstrated that ES can train reinforcement learning policies competitively with gradient-based methods. EGGROLL [@TODO_eggroll_citation] addresses the computational efficiency of ES at billion-parameter scale by structuring perturbations as low-rank matrices for better GPU utilization. Our work is complementary to EGGROLL: they solve the engineering problem of making perturbation-based optimization efficient on hardware, while we address the architectural problem of directing perturbation-based credit to specific modules via probe dictionaries.
+
+## Biologically Plausible Credit Assignment
+
+A substantial body of work has sought alternatives to backpropagation motivated by biological plausibility. Feedback alignment [@lillicrap2016random] showed that random feedback weights can replace the transpose of the forward weights. Direct feedback alignment [@nokland2016direct] routes error signals directly to each layer. Burst-dependent plasticity [@payeur2021burst] and dendritic error computation [@sacramento2018dendritic]provide mechanisms for local learning rules that approximate gradient descent.
+
+PALE differs from these approaches in that it does not attempt to approximate the backpropagation gradient through an alternative mechanism. Instead, it performs credit assignment through a fundamentally different strategy: direct perturbation and selection. This makes it applicable to non-differentiable architectures where even approximate gradient methods cannot operate.
+
+## Eligibility Traces
+
+Classical eligibility traces in reinforcement learning [@sutton2018reinforcement] maintain a scalar record of recent parameter activity that modulates learning when a reward signal arrives. These traces are scalar-valued --- they record *that* a parameter was active but not *in which direction* it should change. PALE extends this concept to directional (low-rank matrix) traces that encode not just activity but the specific perturbation direction that was applied, enabling more targeted credit assignment.
+
+## Synthetic Gradients and Decoupled Learning
+
+@jaderberg2017decoupled introduced decoupled neural interfaces using synthetic gradients, allowing modules to be trained without waiting for a full backward pass. @czarnecki2017understanding analyzed the conditions under which synthetic gradients approximate true gradients. PALE achieves a related form of decoupling --- each module's probe dictionary operates independently --- but without requiring a learned gradient predictor.
+
+## Forward-Mode Alternatives
+
+Forward gradient methods [@baydin2022gradients] compute directional derivatives using forward-mode automatic differentiation, avoiding the memory costs of backpropagation. While PALE shares the property of using forward-direction information rather than backward-flowing gradients, it does not perform automatic differentiation of any kind. The perturbation directions are random and the gradient information emerges from selection rather than computation.
+
+
+# Method
+
+## Overview
+
+PALE instruments a neural network by treating selected linear layers as *probed modules*. Each probed module maintains a *probe bank*: a set of low-rank perturbation directions in its weight space. At each training step, a *branch scheduler* constructs a set of candidate perturbations by combining probe directions across modules with random scales, producing a *branch schedule* that defines multiple perturbed variants of the model. Each variant is evaluated on the current batch, and a *credit assigner* selects the best-performing branch and updates the model weights in that direction.
+
+## Probe Banks
+
+Each probed module $m$ with weight matrix $W_m \in \mathbb{R}^{d_{out} \times d_{in}}$ maintains $K_m$ non-null probes plus a null probe $p_m^{(0)}$. The null probe is represented explicitly by zero vectors:
+$$
+u_m^{(0)} = 0,\qquad v_m^{(0)} = 0,\qquad a_m^{(0)} = 0.
+$$
+When probe $0$ is selected for a module, that module receives no perturbation.
+
+For $k>0$, each probe $p_m^{(k)}$ is a rank-1 perturbation direction represented by vectors
+$$
+u_m^{(k)} \in \mathbb{R}^{d_{out}},
+\qquad
+v_m^{(k)} \in \mathbb{R}^{d_{in}}.
+$$
+
+Given scale $s$, the weight perturbation is
+$$\Delta W_m^{(k)} = s \cdot u_m^{(k)} {v_m^{(k)}}^\top.$$
+
+Probed modules with a bias additionally can have a non-zero additive "bias probe" with probability $p_\text{bias}$ (default $p_\text{bias}=0.7$). We sample a normal distribution to generate bias probes. The rest of the time we set the bias probe to zero and only the probe only perturbs the weight.
+
+$$\Delta b_m^{(k)} = s \cdot a_m^{(k)}$$
+
+Probe directions are initialized randomly and regenerated periodically (every $G$ steps, default $G = 20$) to maintain exploration. When regenerating, the top $K_{retain}$ probes --- those most frequently selected by the credit assigner since the last regeneration --- are retained, and the remaining slots are filled with fresh random directions. Probe retention count is decayed exponentially with factor $\gamma_{retain}$ to favor recently useful directions over historically useful ones.
+
+
+## Branch Scheduling
+
+At each scheduling refresh, the scheduler constructs $P$ branches of the full model: one null branch and $P-1$ counterfactual branches. Branches are indexed by
+$$
+j \in \{0,\ldots,P-1\},
+$$
+with branch $0$ reserved for the unperturbed baseline.
+
+The branch schedule consists of a probe-index matrix
+$$
+S \in \mathbb{N}^{M \times P}
+$$
+and a scale matrix
+$$
+L \in \mathbb{R}^{M \times P}.
+$$
+For module $m$ in branch $j$, $S_{m,j}$ gives the selected probe index and $L_{m,j}$ gives its signed scale.
+
+For the null branch,
+$$
+S_{m,0}=0,\qquad L_{m,0}=0
+$$
+for every module $m$. For counterfactual branches $j>0$, probe indices are sampled uniformly:
+$$
+S_{m,j} \sim \mathrm{Uniform}\{0,\ldots,K_m\}.
+$$
+If $S_{m,j}=0$, we also set $L_{m,j}=0$. Otherwise, the scale is sampled from a log-normal distribution parameterized by the current exploration radius $r$:
+
+$$|L_{m,j}| = r z_{m,j}, \qquad z_{m,j} \sim \text{LogNormal}(0,\sigma_L)$$
+
+Scales are clipped to $[-c \cdot r, c \cdot r]$ where $c$ is a clipping factor, ensuring that the effective perturbation magnitude scales with the exploration radius.
+
+We guarantee that branch $0$ has the null probe selected for all modules with their scales set to $0$, that is:
+
+$$S_{m,0} = 0 \quad L_{m,0} = 0$$
+
+Each branch $j$ produces a perturbed model:
+
+$$W_m^{(j)} = W_m + \mathbf{1}[S_{m,j}\neq 0]\, L_{m,j}\, u_m^{(S_{m,j})} {v_m^{(S_{m,j})}}^\top$$
+
+$$b_m^{(j)} = b_m + \mathbf{1}[S_{m,j}\neq 0]\,L_{m,j}\, a_m^{(S_{m,j})}$$
+
+## Branch Evaluation
+
+All $P$ branches and the unperturbed baseline are evaluated on the current batch. If the 
+input is of shape $B \times D$, it is initially broadcast to shape $P \times B \times D$. Each module uses the perturbed weights and biases, $W_m^{(j)}$ and $b_m^{(j)}$, for branch $j$. The loss is calculated and aggregated across the batch, but keep a vector of $P$ branch losses.
+
+## Credit Assignment
+
+The credit assigner selects the lowest-loss branch or branches $J^*$. In the experiments below we use greedy selection with $\mathrm{top}_k=1$. The same update rule is applied regardless of whether the selected branch is perturbed or null:
+$$
+W_m \leftarrow W_m + \alpha \sum_{j \in J^*} L_{m,j} u_m^{(S_{m,j})} {v_m^{(S_{m,j})}}^\top. $$
+If the null branch is selected, then \(L_{m,0}=0\) and the update is exactly zero. This is equivalent to taking no update, but it allows the implementation to avoid a special-case branch in the update path.
+
+The credit assigner selects the set of branches with the lowest loss, $J^*$. (For the experiments reported below, we used greedy selection with $\text{top}_k = 1$). If the best branch improves upon the baseline, the model weights are updated:
+
+$$W_m \leftarrow W_m + \alpha \sum_{j \in J^*} L_{m,j} \cdot u_m^{(S_{m,j})} {v_m^{(S_{m,j})}}^\top$$
+
+where $\alpha$ is the update step size. Credit is assigned every step, but weight updates are applied every $U$ steps (default $U = 2$), accumulating credit assignments before committing to a weight change. The same schedule is reused for $H$ consecutive batches before being resampled.
+
+## Exploration Control
+
+The exploration radius $r$ and update step size $\alpha$ can be controlled by fixed decay schedules or by an adaptive controller. The adaptive controller maintains exponential moving averages (EMAs) of the loss at multiple timescales and adjusts the exploration radius based on detected learning regime:
+
+- **Plateau**: When fast EMA $\approx$ slow EMA (no progress), the controller expands the
+  exploration radius to search more broadly.
+- **Progress**: When fast EMA $<$ slow EMA (loss decreasing), the controller shrinks the
+  exploration radius to refine within the current basin.
+
+In practice, we find that fixed exploration radius with no decay produces results comparable to tuned schedules (see @sec-ablations), suggesting the method is robust to this hyperparameter. The greedy selection mechanism provides implicit adaptation: after breakthrough, smaller perturbations are naturally favored because they are less likely to exit the basin (see @sec-analysis).
+
+## Computational Cost
+
+Each training step requires $P$ forward passes (one per branch), compared to one forward and one backward pass for gradient-based methods. The cost per step is therefore approximately $\frac{P}{2}$ times that of backpropagation. However, the perturbations share the same input batch and the forward passes are independent, making them amenable to parallelization. The method requires no backward pass and no storage of intermediate activations, reducing memory requirements.
+
+
+# Experiments
+
+We evaluate PALE on four tasks, presented in order of increasing difficulty. Each task demonstrates a qualitatively different capability of the method. All experiments compare PALE against SGD with momentum (SGD+m) and Adam as baselines.
+
+## Experimental Setup
+
+All experiments use the same PALE configuration unless otherwise noted:
+
+| Parameter                           | Value           |
+|-------------------------------------|-----------------|
+| Number probes per module ($K$)      | 16              |
+| Number of Branches ($P$)            | 32              |
+| Exploration radius ($r$)            | 0.8             |
+| Update step size ($\alpha$)         | 0.15            |
+| Probe regeneration frequency ($G$)  | Every 20 steps  |
+| ProbeBank retained ($K_{retain}$)   | 3               |
+| Retention decay ($\gamma_{retain}$) | 0.9             |
+| Credit assignment frequency         | Every step      |
+| Weight update frequency ($U$)       | Every 2 steps   |
+| Branch schedule frequency ($H$)     | Every 2 steps   |
+| Adaptive control frequency          | Every 200 steps |
+| Clipping factor ($c$)               | TODO            |
+| Probe rank                          | 1 (LoRA-style)  |
+| Generator kind                      | LoRA            |
+| Scheduler kind                      | Random          |
+| Credit assigner kind                | Greedy (top-1)  |
+| Batch size                          | 8               |
+
+: PALE hyperparameters used across all experiments. {#tbl-hyperparams}
+
+For SGD+m and Adam baselines, we use learning rate 0.0015, with momentum 0.9 for SGD+m and default Adam parameters ($\beta_1 = 0.9$, $\beta_2 = 0.999$).
+
+For each experiment, we use 4 initialization seeds (10, 20, 30, 40) that determine the initial model weights and data generation. For PALE, each initialization seed is tested with 4 probe seeds (offset by 0, 1, 2, 3 from the init seed), giving 16 PALE runs per configuration. SGD+m and Adam each have 4 runs (one per init seed). All experiments use the same initial weights and input data for a given seed, ensuring fair comparison.
+
+## Experiment 1: Deep Feedforward Regression {#sec-regression}
+
+### Task
+
+A teacher-student regression task where a randomly initialized 7-layer ReLU teacher network (architecture: 20-24-24-24-24-24-16) generates input-output pairs, and a student network with identical architecture learns to replicate the teacher's function. This task tests credit assignment through depth: the gradient signal must propagate through 7 layers to reach the earliest parameters.
+
+This experiment is intentionally favorable to gradient methods. The network is fully differentiable, the loss is dense, and Adam has access to exact reverse-mode gradients. PALE/PBDCA is not expected to win here. The fact that it nevertheless reaches the same order of magnitude as Adam, while clearly outperforming SGD+momentum in this configuration, is useful primarily as a calibration result: the probe-credit mechanism is extracting structured update information rather than merely sampling noise.
+
+### Results
+
+<!-- TODO: Insert figure: grid-loss.png from regression experiment -->
+[PLACEHOLDER: Figure showing learning curves for all methods on 7-layer regression.
+SGD+m plateaus or diverges, Adam converges to near-zero loss, PALE converges on all
+16/16 runs tracking close to Adam.]
+
+| Method  | Final Loss (mean ± std) | Converged |
+|---------|-------------------------|-----------|
+| SGD+m   | TODO ± TODO             | TODO/4    |
+| Adam    | TODO ± TODO             | 4/4       |
+| PALE    | TODO ± TODO             | 16/16     |
+
+: Deep regression results (7-layer, 20×24×24×24×24×24×16). {#tbl-regression}
+
+PALE converges on all 16 runs, reaching a final loss of approximately $4 \times 10^{-6}$ compared to Adam's $1 \times 10^{-6}$. SGD+momentum fails to converge on most seeds, plateauing at losses 100--1000$\times$ higher than PALE. The 7-layer depth creates sufficient gradient degradation to disrupt SGD+m, while PALE's perturbation-based credit assignment is unaffected by depth because it never computes or propagates gradients.
+
+PALE's convergence rate in the early phase is comparable to Adam, with all probe seeds producing tightly clustered trajectories, indicating robustness to the specific choice of random probe directions.
+
+
+## Experiment 2: T-Maze with Delayed Credit {#sec-tmaze}
+
+### Task
+
+The T-maze is a sequential decision task that requires temporal credit assignment. At time $t = 0$, the agent receives a cue indicating the correct action. For the next $d$ steps(the delay), the agent receives uninformative observations. At time $t = d + 1$ (the junction), the agent must produce an output that depends on the cue received $d$ steps earlier. The network architecture is a SimpleRNN with a 2-dimensional input, 16-dimensional hidden state, and 1-dimensional output (2×16×1), containing three probed linear modules: input projection, hidden-to-hidden projection, and output projection.
+
+With 2 cues ($\{0, 1\}$, target $\pm 1$), this task directly tests the ability to assign credit across a temporal gap: the parameters of the input projection at $t = 0$ must be updated based on the loss at $t = d + 1$, and the relevant gradient signal must survive $d$ steps of recurrent processing.
+
+### Results
+
+<!-- TODO: Insert figure: grid showing learning curves at each delay -->
+[PLACEHOLDER: Figure showing learning curve grids at delays 10, 20, 30, 50.
+SGD+m flat at 1.0 across all delays. Adam succeeds at delay 10, struggles at 20-30,
+fails at 50. PALE shows characteristic phase-transition breakthroughs.]
+
+| Delay | SGD+m | Adam  | PALE   |
+|-------|-------|-------|--------|
+| 10    | 0/4   | 4/4   | 16/16  |
+| 20    | 0/4   | 1/4   | 9/16   |
+| 30    | 0/4   | 0/4   | 7/16   |
+| 50    | 0/4   | 0/4   | 9/16   |
+
+: T-maze breakthrough rates (2-cue, equal steps). {#tbl-tmaze}
+
+SGD+momentum completely fails at every delay, never moving from chance-level loss. This is expected: the gradient signal from the loss at the junction must flow backward through $d$ steps of recurrent computation, and SGD+m cannot maintain it.
+
+Adam succeeds reliably at delay 10 but deteriorates rapidly. At delay 20, only 1 of 4 seeds breaks through. At delays 30 and 50, Adam fails entirely within the step budget. Adam has access to exact gradients via BPTT, but the signal quality degrades with delay length, and Adam's adaptive learning rates cannot compensate for a gradient that has effectively vanished.
+
+PALE shows a qualitatively different pattern. At delay 10, it achieves perfect success (16/16). At longer delays, it maintains substantial success rates (7--9/16) even at delay 50 where Adam scores 0/4. The learning dynamics are distinctive: loss remains at the plateau (chance level) for an extended period, then undergoes a sharp phase transition to near-zero loss. This is characteristic of perturbation-based search --- the method explores until it finds the edge of a loss basin, then rapidly converges.
+
+Notably, PALE's success rate does not degrade monotonically with delay: it achieves 9/16 at both delay 20 and delay 50. This suggests that the difficulty for PALE depends more on the interaction between initialization and probe directions than on the delay length itself --- a qualitatively different failure mode from gradient-based methods where longer delays systematically degrade the learning signal.
+
+
+## Experiment 3: Multi-Cue T-Maze {#sec-multicue}
+
+### Task
+
+We extend the T-maze to 4 cues ($\{0, 1, 2, 3\}$) with targets $+1$ for odd cues and $-1$for even cues. This eliminates the monotonic relationship between cue value and target that exists in the 2-cue version, requiring the network to learn a nonlinear classification(parity) at the cue step and maintain this classification through the delay. The same SimpleRNN architecture (2×16×1) is used.
+
+### Results
+
+<!-- TODO: Insert figure: grid-loss.png from multi-cue experiment -->
+[PLACEHOLDER: Figure showing learning curves for delay 10, 4-cue T-maze.
+Adam mostly fails, SGD partially learns, PALE succeeds on 14/16.]
+
+| Method | Delay 10 |
+|--------|----------|
+| SGD+m  | 0/4      |
+| Adam   | 1/4      |
+| PALE   | 14/16    |
+
+: Multi-cue T-maze results (4 cues, delay 10). {#tbl-multicue}
+
+The addition of two cues with non-monotonic target mapping dramatically changes the difficulty for gradient-based methods. Adam drops from 4/4 on the 2-cue version to 1/4, and the single Adam success shows slow, unstable convergence. SGD+m partially reduces its loss on some seeds (indicating partial cue discrimination) but never solves the full task.
+
+PALE is minimally affected, dropping from 16/16 to 14/16. The method maintains its characteristic rapid phase-transition dynamics. This result indicates that the perturbation- based approach handles nonlinear internal structure at least as well as linear, while gradient-based methods are disproportionately affected by the increased complexity of the cue-to-target mapping.
+
+
+## Experiment 4: Non-Differentiable Discrete Memory {#sec-memory}
+
+### Task
+
+We augment the T-maze with a discrete memory mechanism. At time $t = 0$, the hidden state produced by the input projection is further projected through a learned *memory projection*into a memory space of dimension $M$. The argmax of this projection is computed, producing a one-hot vector of dimension $M$ that is stored as the memory. At the junction ($t = d+1$), the stored one-hot memory is concatenated with the current hidden state and passed to the output projection.
+
+The argmax operation is non-differentiable: the gradient of a one-hot vector produced by argmax with respect to the input is zero almost everywhere. This means that no gradient information can flow from the loss at the junction back through the memory to the input and memory projections. The network must learn *what to write to memory* --- specifically, it must learn memory projection weights such that different cues produce different argmax indices --- but backpropagation provides no signal for how to change those weights.
+
+We use 4 cues and memory dimension $M = 4$, creating a setting where the memory has exactly enough capacity to distinguish all cues, but the initial random projection will generally produce collisions (multiple cues mapping to the same argmax index).
+
+### Results
+
+#### Delay 10, 4 Cues, Memory 4
+
+<!-- TODO: Insert figure: grid-loss.png from memory delay-10 experiment -->
+[PLACEHOLDER: Figure showing learning curves. Adam 0/4 with unstable partial learning.
+SGD plateaus around 0.7. PALE 16/16 with fast convergence.]
+
+| Method  | Success Rate |
+|---------|--------------|
+| SGD+m   | 0/4          |
+| Adam    | 0/4          |
+| PALE    | 16/16        |
+
+: T-maze with discrete memory results (4 cues, memory 4, delay 10). {#tbl-memory-10}
+
+Adam's success rate drops from 1/4 (without memory) to 0/4 (with memory). The non-differentiable barrier completely blocks the gradient signal that was previously allowing occasional breakthroughs. Adam's loss oscillates unstably, suggesting the optimizer is attempting to learn the differentiable components of the network but cannot coordinate them with the memory.
+
+PALE achieves 16/16 --- *improving* from 14/16 without memory. This is the key asymmetry:
+
+> **The non-differentiable memory makes the task easier for PALE and impossible for Adam.**
+
+This occurs because the discrete memory provides a useful computational primitive: a mechanism for writing a discrete code at the cue step and retrieving it at the junction. PALE can learn to use this mechanism because it optimizes by perturbing the memory projection weights and observing the downstream effect on loss, without needing to differentiate through the argmax. The memory offloads the temporal credit assignment problem from the continuous hidden state to a discrete storage mechanism, which is actually easier for the network to exploit once the memory projection learns to separate the cues.
+
+#### Delay 50, 4 Cues, Memory 4
+
+<!-- TODO: Insert figure: grid-loss.png from memory delay-50 experiment (the grid above) -->
+[PLACEHOLDER: Figure showing the final grid. SGD 0/4, Adam 0/4,
+PALE 16/16 with fast clean breakthroughs.]
+
+| Method  | Success Rate |
+|---------|--------------|
+| SGD+m   | 0/4          |
+| Adam    | 0/4          |
+| PALE    | 16/16        |
+
+: T-maze with discrete memory results (4 cues, memory 4, delay 50). {#tbl-memory-50}
+
+At delay 50 --- the longest horizon tested --- PALE achieves perfect success (16/16) with fast, clean breakthroughs, typically within the first 2,000--3,000 steps. This is a dramatic improvement over the 9/16 success rate on the same delay without memory. The discrete memory has effectively eliminated the temporal credit assignment bottleneck: instead of maintaining cue information in continuous hidden state through 50 steps of recurrence, the network writes a discrete code at step 0 and reads it at the junction. The credit assignment problem reduces from "propagate information through 50 recurrent steps" to "learn a good memory projection," which PALE solves rapidly.
+
+Adam remains at 0/4, unable to learn anything through the argmax barrier regardless of the delay length. SGD+m similarly fails entirely.
+
+### The Asymmetry
+
+These results reveal a fundamental asymmetry between gradient-based and perturbation-based optimization:
+
+|                      | Without Memory | With Memory |
+|----------------------|----------------|-------------|
+| **PALE, delay 50**   | 9/16           | 16/16       |
+| **Adam, delay 50**   | 0/4            | 0/4         |
+
+Adding a non-differentiable component to the architecture simultaneously:
+
+- **Helps PALE**: Success rate increases from 9/16 to 16/16 and convergence speed improves
+  dramatically, because the memory provides a useful computational primitive that the
+  optimizer can learn to exploit.
+
+- **Blocks Adam**: Adam cannot learn through the argmax, so the memory is invisible to
+  gradient-based optimization. Adam is no worse (still 0/4 at delay 50), but it cannot
+  benefit from the architectural addition.
+
+This asymmetry has implications for architecture design. If an optimizer can learn through non-differentiable operations, architects are free to incorporate discrete memory, hard routing, symbolic operations, and other non-differentiable primitives that may make computational problems easier even though they make the optimization problem harder (or impossible) for gradient-based methods.
+
+
+# Analysis {#sec-analysis}
+
+## Phase Transition Dynamics
+
+PALE exhibits a characteristic learning dynamic on the T-maze tasks that differs qualitatively from gradient descent. Rather than smooth, continuous loss reduction, successful PALE runs show an extended plateau at chance-level loss followed by a sharp phase transition to near-zero loss. This is consistent with a search-then-exploit dynamic: the method explores perturbation directions without making meaningful progress until it finds the edge of a loss basin, at which point it rapidly converges.
+
+<!-- TODO: Insert figure: representative learning curves showing phase transitions at
+different delays, highlighting the sharp transition character -->
+[PLACEHOLDER: Figure showing overlaid learning curves from multiple PALE runs at delay 20,
+demonstrating the plateau-then-breakthrough pattern with varying breakthrough times.]
+
+## Implicit Scale Adaptation
+
+Analysis of the perturbation scales selected by the greedy credit assigner reveals an implicit adaptation mechanism. Before breakthrough, the scale of the best perturbation (relative to the mean scale across all perturbations) is approximately 1.0 --- no particular scale is favored because no perturbation direction is genuinely better than others on the plateau. After breakthrough, the best perturbation's scale drops below the mean, indicating that smaller perturbations are preferentially selected.
+
+<!-- TODO: Insert figure: best_scale plot showing ratio of best perturbation scale to
+mean scale over training -->
+[PLACEHOLDER: Figure showing best_scale / mean_scale ratio over training steps,
+demonstrating the shift from ~1.0 (plateau) to <1.0 (post-breakthrough).]
+
+This occurs because once the model is in a loss basin, large perturbations are more likely to exit the basin and increase loss, while small perturbations refine the solution. The greedy selection mechanism provides automatic scale adaptation without any explicit schedule: the same fixed exploration radius supports broad search during the plateau and fine-grained refinement after breakthrough.
+
+This finding explains the empirical observation that fixed exploration radius (no decay)performs as well as tuned decay schedules (@sec-ablations): the selection mechanism itself adapts the effective perturbation magnitude to the learning regime.
+
+## Perturbation Variance as Landscape Signal
+
+The standard deviation of loss across perturbation directions provides information about the local loss landscape geometry. During flat plateaus, all perturbation directions produce similar loss (low perturbation std) because the landscape has no directional structure. Near basin edges, some directions improve loss while others worsen it, causing the perturbation std to increase. This signal swells before breakthrough events, suggesting it could be used as a diagnostic for proximity to productive regions of the loss landscape.
+
+<!-- TODO: Insert figure: loss_std plot showing perturbation variance over training,
+with breakthrough annotated -->
+[PLACEHOLDER: Figure showing loss std across perturbations, with annotation showing
+the swell before breakthrough.]
+
+
+# Ablations {#sec-ablations}
+
+## Exploration Radius Schedule
+
+We compare three scheduling strategies for the exploration radius on the T-maze at delay 20: fixed decay (multiply by 0.8 every 3000 steps), fixed (no decay, constant at 0.8), and EMA-driven adaptive control. All three produce the same success rate (9/16), indicating that the method is robust to this choice. This robustness is explained by the implicit scale adaptation described in @sec-analysis.
+
+<!-- TODO: table or figure comparing the three scheduling strategies -->
+[PLACEHOLDER: Table showing 9/16 for all three strategies at delay 20.]
+
+## TODO: Additional Ablations
+
+<!-- These ablations should be run and reported in the final version -->
+
+- **Random perturbation baseline (no directional traces)**: Same perturbation budget but
+  random direction each step, no probe dictionary structure. Expected: fails on T-maze,
+  may partially work on regression.
+- **Probe rank**: Performance at rank 1, 2, 4 to assess the trade-off between perturbation
+  expressiveness and computational cost.
+- **Number of perturbations ($P$)**: Performance at $P$ = 8, 16, 32, 64.
+- **Number of probes per module ($K$)**: Performance at $K$ = 4, 8, 12, 24.
+- **Probe retention**: Comparison of no retention, retention with simple counting, and
+  retention with decayed counting.
+- **Credit/update frequency**: Credit every step with update every 1 vs. 2 vs. 4 steps.
+
+
+# Discussion
+
+## Gradient-Free Optimization Enables New Architectures
+
+The central finding of this work is not merely that a gradient-free method can compete with gradient-based optimization on standard tasks. Rather, it is that removing the gradient requirement opens a design space of architectures incorporating non-differentiable components that actively benefit learning. The discrete memory experiment demonstrates this concretely: a component that blocks gradient flow and degrades Adam's performance actually improves PALE's performance by providing a useful computational primitive.
+
+This suggests a research direction in which neural architectures are designed not for gradient amenability but for computational utility, with the optimizer adapted to handle whatever operations the architecture requires. Discrete memory, hard attention, symbolic lookup, hash-based routing, and other non-differentiable operations could be incorporated freely if the optimizer can learn through them.
+
+## Relationship to Biological Learning
+
+The brain does not perform backpropagation. This observation has motivated decades of research on biologically plausible alternatives, most of which attempt to approximate gradient descent through local learning rules. PALE offers a different perspective:rather than approximating the gradient, it performs optimization through a mechanism --- perturbation and selection --- that is more naturally compatible with biological constraints. Neuromodulatory systems in the brain could plausibly implement a form of probe-based perturbation, with dopaminergic or noradrenergic signals providing the modulatory "scales" and reward signals providing the selection pressure.
+
+The non-differentiable memory result is particularly suggestive in this context. Biological memory systems (hippocampal episodic memory, working memory buffers) involve discrete write/read operations that are not differentiable in any meaningful sense. A learning system that can optimize through such operations could leverage the full computational repertoire of biological neural architectures.
+
+## Connection to Adaptive Local Experimentation
+
+PALE can be understood as an instance of a broader framework we term Adaptive Local Experimentation (ALE), in which learning is framed as a process of local experimental design under computational budget constraints. In this view, each probe perturbation is an "experiment" that tests a hypothesis about the local loss landscape, and the credit assignment step selects among experimental outcomes. The exploration radius controls the scope of experimentation, and the probe dictionary defines the hypothesis space.
+
+This framing suggests natural extensions: adaptive experiment design based on epistemic state about the loss landscape, portfolio approaches that mix perturbation-based experimentation with gradient-based optimization in different training regimes, and hierarchical experimentation at multiple scales.
+
+## Limitations
+
+PALE in its current form has several limitations that should be acknowledged:
+
+**Computational cost per step.** Each PALE step requires $P + 1$ forward passes, making it approximately $16\times$ more expensive per step than backpropagation at $P = 32$. While PALE requires no backward pass, the net wall-clock cost per step is higher than gradient-based methods. For tasks where Adam is applicable and sufficient, Adam will typically be more efficient.
+
+**Success rate variability.** On the T-maze without memory, PALE's success rate varies from 7/16 to 16/16 depending on the delay and configuration. Some initialization/probe seed combinations fail to find the loss basin within the step budget. The method would benefit from better understanding of what makes certain seed combinations harder, and from mechanisms to detect and recover from unproductive search.
+
+**Scale.** All experiments use small networks (tens to hundreds of parameters). The combinatorial structure of probe perturbations across many modules remains an open question at larger scales, though the 7-layer regression result (7 probed modules) provides initial evidence that the method does not degrade with moderate depth.
+
+**Adaptive control.** Our experiments with EMA-driven adaptive exploration radius did not improve upon fixed schedules. The core challenge is that increasing the exploration radius to escape plateaus also increases the noise in per-step credit assignment. Addressing this likely requires accumulating evidence across multiple batches before committing to an update direction at high exploration radius, which is a direction for future work.
+
+
+# Future Work
+
+Several directions emerge naturally from these results.
+
+**Evidence-gated updates.** Rather than committing to the best perturbation direction after each batch, accumulate evidence across multiple batches and update only when the best direction is statistically distinguishable from alternatives. This would address the noise problem at high exploration radius and could be framed as a form of sequential hypothesis testing within the ALE framework.
+
+**Hybrid optimization.** PALE and gradient-based methods have complementary strengths: Adam is efficient when gradients are informative and the landscape is smooth, while PALE handles non-differentiable components and long-range credit assignment. A hybrid approach could use gradient-based optimization for differentiable components and PALE for non-differentiable ones, or switch between methods based on detected training regime.
+
+**Larger architectures.** Scaling PALE to networks with hundreds or thousands of modules will require sparse perturbation strategies (perturbing subsets of modules rather than all simultaneously) and efficient perturbation scheduling. The communication-efficient properties of probe-based updates (sharing probe identities and coefficients rather than dense gradients) may offer advantages in distributed training settings.
+
+**Richer memory architectures.** The discrete memory experiment used a simple argmax-based one-hot encoding. More sophisticated non-differentiable memory operations --- content- addressed memory, stack machines, hash tables --- could provide richer computational primitives for PALE to exploit. The key question is whether PALE can learn to use these more complex mechanisms as effectively as it uses simple discrete memory.
+
+**Distributed training.** Because PALE updates can be represented in terms of sparse low-rank probe identities and coefficients rather than dense gradient tensors, it may admit communication-efficient distributed variants. Instead of all-reducing gradients, workers could share winning probes, associated coefficients, or richer epistemic statistics about probe utility, with a central controller aggregating this evidence into global updates. This raises open questions about how best to merge local experimental evidence across shards, especially when probe interactions are nonlinear, but suggests that PALE may offer favorable tradeoffs not only in memory usage and applicability to non-differentiable systems, but also in communication bandwidth.
+
+
+# Conclusion
+
+We have presented Probe-based Adaptive Low-rank Exploration (PALE), a gradient-free credit assignment method that optimizes neural networks by perturbing weights through low-rank probe dictionaries and selecting perturbation directions that improve loss. Through a progression of experiments, we have demonstrated that PALE provides robust credit transport through deep networks, solves temporal credit assignment at delays where gradient-based methods fail, handles nonlinear internal structure, and --- most significantly --- can optimize through non-differentiable computational primitives that are completely opaque to backpropagation.
+
+The central finding is an asymmetry: non-differentiable architectural components that block gradient-based optimization can actively benefit perturbation-based methods by providing useful computational primitives. A discrete memory that prevents Adam from learning at all simultaneously enables PALE to achieve perfect success at delay 50, converting a hard temporal credit assignment problem into an easy memory-projection learning problem. This result suggests that the design space of neural architectures is currently artificially constrained by the requirement of end-to-end differentiability, and that relaxing this constraint via gradient-free optimization methods can make hard problems easier rather than harder.
+
+PALE is not a replacement for backpropagation on tasks where gradients are available and informative. It is a method for settings where gradients are unavailable, unreliable, or insufficient --- and our results show that actively designing architectures for such settings, rather than merely tolerating non-differentiability, can yield substantial benefits.
+
+
+# References {.unnumbered}
+
+::: {#refs}
+:::
